@@ -8,7 +8,6 @@ const vec4 = glMatrix.vec4;
 const mat4 = glMatrix.mat4;
 const quat = glMatrix.quat;
 
-
 // Global WebGL context variable
 let gl;
 
@@ -23,22 +22,17 @@ window.addEventListener('load', function init() {
 
     // Configure WebGL
     gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.clearColor(1.0, 1.0, 1.0, 1.0);
+    gl.clearColor(0.5, 0, 1, 1);
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.CULL_FACE);
 
     // Initialize the WebGL program and data
     gl.program = initProgram();
     initEvents();
+    initBuffers();
+    initUniforms();
 
-    const terrain = generate_mesh(generate_terrain(7, 0.1));
-    const terrainModel = {vertices: terrain[0], indices: terrain[1]};
-
-    loadModel(terrainModel, {isTriStrip: true, defaultColor: [0, 1, 0]});
-
-    // Set initial values of uniforms
-    gl.uniformMatrix4fv(gl.program.uModelViewMatrix, false, mat4.create());
-    gl.uniform4fv(gl.program.uLight, [0, 0, 0, 1]);
+    render();
 });
 
 /**
@@ -51,56 +45,72 @@ function initProgram() {
         `#version 300 es
         precision mediump float;
 
-        uniform mat4 uModelViewMatrix;
+        uniform vec4 uLight; // Light position
+        uniform mat4 uModelMatrix;
+        uniform mat4 uViewMatrix;
         uniform mat4 uProjectionMatrix;
-        uniform vec4 uLight;
 
         in vec4 aPosition;
-        in vec3 aColor;
         in vec3 aNormal;
-
-        out vec4 vColor;
+        // in vec3 aColor;
 
         out vec3 vNormalVector;
         out vec3 vLightVector;
         out vec3 vEyeVector;
 
+        flat out vec3 vColor;
+
         void main() {
-            vec4 P = uModelViewMatrix * aPosition;
-            vNormalVector = mat3(uModelViewMatrix) * aNormal;
-            vLightVector = uLight.w == 1.0 ? P.xyz - uLight.xyz : uLight.xyz;
-            vEyeVector = P.xyz;
-            gl_Position = uProjectionMatrix * P;
-            vColor = vec4(aColor, 1.0);
+            // mat4 modelViewMatrix = uViewMatrix * uModelMatrix;
+
+            vec4 P = uViewMatrix * aPosition;
+
+            vNormalVector = mat3(uViewMatrix) * aNormal;
+            vec4 light = uViewMatrix * uLight;
+            vLightVector = (light.w == 1.0) ? (P - light).xyz : light.xyz;
+            vEyeVector = -P.xyz; // from position to camera
+
+            gl_Position =  uProjectionMatrix * P;
+            vColor = vec3(0.0, 1.0, 0.0); // hardcoded color
         }`
     );
+
     // Fragment Shader
     let frag_shader = compileShader(gl, gl.FRAGMENT_SHADER,
         `#version 300 es
         precision mediump float;
 
-        // Light and material properties
-        const vec3 lightColor = vec3(1, 1, 1);
-        const vec3 materialAmbient = vec3(0, 0.2, 0);
-        const vec3 materialDiffuse = vec3(0, 0.5, 0);
-        const float materialShininess = 10.0;
+        // Light constants
+        const vec3 lightColor = normalize(vec3(1.0, 1.0, 1.0));
+        const float lightIntensity = 4.0;
 
-        // Vectors (varying variables from vertex shader)
+        // Material constants
+        const float materialAmbient = 0.2;
+        const float materialDiffuse = 0.4;
+        const float materialSpecular = 0.6;
+        const float materialShininess = 10.0;
+        
+        // Attenuation constants
+        const float lightConstantA = 0.05;
+        const float lightConstantB = 0.02;
+        const float lightConstantC = 0.02;
+
         in vec3 vNormalVector;
         in vec3 vLightVector;
         in vec3 vEyeVector;
 
-        in vec4 vColor;
+        // Fragment base color
+        flat in vec3 vColor;
 
+        // Output color of the fragment
         out vec4 fragColor;
 
         void main() {
-            // Normalize vectors
+            // normalize vectors
             vec3 N = normalize(vNormalVector);
             vec3 L = normalize(vLightVector);
             vec3 E = normalize(vEyeVector);
 
-            // Compute lighting
             float diffuse = dot(-L, N);
             float specular = 0.0;
             if (diffuse < 0.0) {
@@ -109,35 +119,83 @@ function initProgram() {
                 vec3 R = reflect(L, N);
                 specular = pow(max(dot(R, E), 0.0), materialShininess);
             }
-            
-            // Compute final color
-            fragColor.rgb = lightColor * ((materialAmbient + materialDiffuse * diffuse) + specular);
+
+            float d = length(vLightVector);
+            float attenuation = 1.0 / ((lightConstantA * d * d) + (lightConstantB * d) + lightConstantC);
+
+            // compute lighting
+            float A = materialAmbient;
+            float D = materialDiffuse * diffuse * attenuation;
+            float S = materialSpecular * specular * attenuation;
+
+            fragColor.rgb = (((A + D) * vColor) + S) * lightColor * lightIntensity;
             fragColor.a = 1.0;
         }`
     );
+
     // Link the shaders into a program and use them with the WebGL context
     let program = linkProgram(gl, vert_shader, frag_shader);
     gl.useProgram(program);
     
     // Get the attribute indices
     program.aPosition = gl.getAttribLocation(program, 'aPosition');
-    program.aColor = gl.getAttribLocation(program, 'aColor');
+    // program.aColor = gl.getAttribLocation(program, 'aColor');
     program.aNormal = gl.getAttribLocation(program, 'aNormal');
 
     // Get the uniform indices
-    program.uModelViewMatrix = gl.getUniformLocation(program, 'uModelViewMatrix');
+    program.uModelMatrix = gl.getUniformLocation(program, 'uModelMatrix');
+    program.uViewMatrix = gl.getUniformLocation(program, 'uViewMatrix');
     program.uProjectionMatrix = gl.getUniformLocation(program, 'uProjectionMatrix');
+    program.uLight = gl.getUniformLocation(program, 'uLight');
 
     return program;
 }
 
 /**
+ * Initialize event handlers
+ */
+function initEvents() {
+    window.addEventListener('resize', onWindowResize);
+}
+
+function initBuffers() {
+    const terrain = generate_mesh(generate_terrain(6, 0.1, Math.seedrandom(782378)));
+    const terrainModel = {vertices: terrain[0], indices: terrain[1]};
+
+    gl.terrain = loadModel(terrainModel, true);
+
+    let cube_coords = [
+        1, 1, 1, // A
+        -1, 1, 1, // B
+        -1, -1, 1, // C
+        1, -1, 1, // D
+        1, -1, -1, // E
+        -1, -1, -1, // F
+        -1, 1, -1, // G
+        1, 1, -1, // H
+    ];
+    let cube_indices = [
+        1, 2, 0, 2, 3, 0,
+        7, 6, 1, 0, 7, 1,
+        1, 6, 2, 6, 5, 2,
+        3, 2, 4, 2, 5, 4,
+        6, 7, 5, 7, 4, 5,
+        0, 3, 7, 3, 4, 7,
+    ];
+    gl.cube = loadModel({vertices: cube_coords, indices: cube_indices});
+}
+
+function initUniforms() {
+    gl.uniform4fv(gl.program.uLight, [0, 3, 0, 1]);
+}
+
+/**
  * Load a model into the GPU and return its information.
  */
-function loadModel(model, optionalArgs) {
-    optionalArgs = initOptionalArgs(optionalArgs, {isTriStrip: false});
-
-    const {defaultColor, isTriStrip} = optionalArgs;
+function loadModel(model, isTriStrip) {
+    if (typeof isTriStrip === "undefined") {
+        isTriStrip = false;
+    }
 
     // Create and bind the VAO
     const vao = gl.createVertexArray();
@@ -145,15 +203,16 @@ function loadModel(model, optionalArgs) {
 
     // Load vertex coordinates into GPU
     const coords = Float32Array.from(model.vertices);
-    loadArrayBuffer(coords, gl.program.aPosition, 3, gl.Float);
+    loadArrayBuffer(coords, gl.program.aPosition, 3, gl.FLOAT);
     
     // Load vertex normals into GPU
     const normals = calc_normals(coords, model.indices, isTriStrip);
-    loadArrayBuffer(normals, gl.program.aNormal, 3, gl.Float);
+    loadArrayBuffer(normals, gl.program.aNormal, 3, gl.FLOAT);
     
-    console.log(gl.program.aColor);
+    // console.log(gl.program.aColor);
 
     // Load vertex colors into GPU
+    /*
     {
         let colors;
         if (typeof defaultColor === "undefined") {
@@ -163,7 +222,7 @@ function loadModel(model, optionalArgs) {
             colors = Array(coords.length / 3).fill(null).flatMap(() => defaultColor);
         }
         loadArrayBuffer(colors, gl.program.aColor, 3, gl.Float);
-    }
+    }*/
 
     // Load index data into the GPU
     const indBuffer = gl.createBuffer();
@@ -175,22 +234,9 @@ function loadModel(model, optionalArgs) {
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
 
-    return {vao, count: model.indices.length};
-}
+    const mode = isTriStrip ? gl.TRIANGLE_STRIP : gl.TRIANGLES;
 
-/**
- * Initializes optionalArgs with defaults
- * and handles when its not an object.
-*/
-function initOptionalArgs(optionalArgs, defaults) {
-    const type = typeof optionalArgs;
-    if (type === "undefined") {
-        optionalArgs = {};
-    } else if (type !== "object") {
-        throw new Error("Invalid argument.");
-    }
-
-    return Object.assign(optionalArgs, defaults);
+    return {vao, count: model.indices.length, mode};
 }
 
 /**
@@ -213,28 +259,101 @@ function loadArrayBuffer(values, location, numComponents, componentType) {
 }
 
 /**
- * Initialize event handlers
- */
-function initEvents() {
-    window.addEventListener('resize', onWindowResize);
-}
-
-/**
  * Keep the canvas sized to the window.
  */
 function onWindowResize() {
     let size = Math.min(window.innerWidth, window.innerHeight);
+
     gl.canvas.width = gl.canvas.height = size;
     gl.canvas.style.width = gl.canvas.style.height = size + 'px';
     gl.viewport(0, 0, size, size);
-    //updateProjectionMatrix();
+
+    updateProjectionMatrix();
 }
 
 /**
  * Render the scene.
  */
 function render() {
-    return;
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    updateProjectionMatrix();
+    updateViewMatrix();
+
+    for (const model of [gl.cube, gl.terrain]) {
+        gl.uniformMatrix4fv(gl.program.uModelMatrix, false, mat4.identity(mat4.create()));
+        
+        gl.bindVertexArray(model.vao);
+        gl.drawElements(model.mode, model.count, gl.UNSIGNED_SHORT, 0);
+    }
+
+    // Clean up
+    gl.bindVertexArray(null);
+}
+
+/**
+ * converts from angle-axis to quaternion.
+ * angle: angle in degrees.
+ * axis: an array of 3 values.
+ */
+function angleAxisToQuat(angle, axis) {
+    angle = degrees2radians(angle);
+    
+    axis = vec3.normalize(vec3.create(), axis);
+
+    const sin = Math.sin(angle/2);
+    const cos = Math.cos(angle/2);
+
+    const q = quat.fromValues(
+        axis[0] * sin,
+        axis[1] * sin,
+        axis[2] * sin,
+        cos
+    );
+
+    return q;
+}
+
+function angleAxisToMat4(angle, axis) {
+    const q = angleAxisToQuat(angle, axis);
+    
+    return mat4.fromQuat(mat4.create(), q);
+}
+
+// Converts an angle in degrees to radians.
+function degrees2radians(angle) {
+    return (angle / 360) * (2 * Math.PI);
+}
+
+/**
+ * Updates the view matrix.
+ */
+function updateViewMatrix() {
+    let view = mat4.create();
+    {
+        const isTopView = true;
+        
+        if (isTopView) {
+            mat4.fromRotationTranslation(view,
+                angleAxisToQuat(90, [1, 0, 0]),
+                [0, 0, -6]
+            );
+        } else {
+            mat4.fromTranslation(view, [0, 0, -1]);
+        }
+    }
+    
+    gl.uniformMatrix4fv(gl.program.uViewMatrix, false, view);
+}
+
+/**
+ * Updates the projection transformation matrix.
+ */
+function updateProjectionMatrix() {
+    let w, h = [gl.canvas.width, gl.canvas.height];
+    const p  = mat4.perspective(mat4.create(), degrees2radians(90), w / h, 0.0001, 100);
+
+    gl.uniformMatrix4fv(gl.program.uProjectionMatrix, false, p);
 }
 
 /**
