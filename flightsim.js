@@ -2,7 +2,6 @@
 // Authors: Bryan Cohen & Tanishq Iyer
 'use strict';
 
-
 // Allow use of glMatrix values directly instead of needing the glMatrix prefix
 const vec3 = glMatrix.vec3;
 const vec4 = glMatrix.vec4;
@@ -23,8 +22,8 @@ window.addEventListener('load', function init() {
     if (!gl) { window.alert("WebGL isn't available"); return; }
 
     // Configure WebGL
-    gl.viewport(0, 0, canvas.width, canvas.height); // this is the region of the canvas we want to draw on (all of it)
-    gl.clearColor(1.0, 1.0, 1.0, 0.0); // setup the background color with red, green, blue, and alpha
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clearColor(1.0, 1.0, 1.0, 1.0);
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.CULL_FACE);
 
@@ -32,21 +31,10 @@ window.addEventListener('load', function init() {
     gl.program = initProgram();
     initEvents();
 
-    // Load models and wait for them all to complete
-    Promise.all([
-        loadModel('teapot.json'),
-    ]).then(
-        models => {
-            // All models have now fully loaded
-            // Now we can add user interaction events and render the scene
-            // The provided models is an array of all of the loaded models
-            // Each model is a VAO and a number of indices to draw
-            gl.models = models;
-            onWindowResize();
-            initEvents();
-            render();
-        }
-    );
+    const terrain = generate_mesh(generate_terrain(7, 0.1));
+    const terrainModel = {vertices: terrain[0], indices: terrain[1]};
+
+    loadModel(terrainModel, {isTriStrip: true, defaultColor: [0, 1, 0]});
 
     // Set initial values of uniforms
     gl.uniformMatrix4fv(gl.program.uModelViewMatrix, false, mat4.create());
@@ -68,7 +56,10 @@ function initProgram() {
         uniform vec4 uLight;
 
         in vec4 aPosition;
+        in vec3 aColor;
         in vec3 aNormal;
+
+        out vec4 vColor;
 
         out vec3 vNormalVector;
         out vec3 vLightVector;
@@ -80,6 +71,7 @@ function initProgram() {
             vLightVector = uLight.w == 1.0 ? P.xyz - uLight.xyz : uLight.xyz;
             vEyeVector = P.xyz;
             gl_Position = uProjectionMatrix * P;
+            vColor = vec4(aColor, 1.0);
         }`
     );
     // Fragment Shader
@@ -97,6 +89,8 @@ function initProgram() {
         in vec3 vNormalVector;
         in vec3 vLightVector;
         in vec3 vEyeVector;
+
+        in vec4 vColor;
 
         out vec4 fragColor;
 
@@ -128,54 +122,94 @@ function initProgram() {
     // Get the attribute indices
     program.aPosition = gl.getAttribLocation(program, 'aPosition');
     program.aColor = gl.getAttribLocation(program, 'aColor');
+    program.aNormal = gl.getAttribLocation(program, 'aNormal');
 
     // Get the uniform indices
     program.uModelViewMatrix = gl.getUniformLocation(program, 'uModelViewMatrix');
     program.uProjectionMatrix = gl.getUniformLocation(program, 'uProjectionMatrix');
+
     return program;
 }
 
 /**
- * Load a model from a file into a VAO and return the VAO.
+ * Load a model into the GPU and return its information.
  */
-function loadModel(filename) {
-    return fetch(filename)
-        .then(r => r.json())
-        .then(raw_model => {
-            // Create and bind the VAO
-            let vao = gl.createVertexArray();
-            gl.bindVertexArray(vao);
-            
-            // Load the vertex coordinate data onto the GPU and associate with attribute
-            let positions = Float32Array.from(raw_model.vertices);
-            let posBuffer = gl.createBuffer(); // create a new buffer
-            gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer); // bind to the new buffer
-            gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW); // load the data into the buffer
-            gl.vertexAttribPointer(gl.program.aPosition, 3, gl.FLOAT, false, 0, 0); // associate the buffer with "aPosition" as length-2 vectors of floats
-            gl.enableVertexAttribArray(gl.program.aPosition); // enable this set of data
+function loadModel(model, optionalArgs) {
+    optionalArgs = initOptionalArgs(optionalArgs, {isTriStrip: false});
 
-            // Load the vertex normal data onto the GPU and associate with attribute
-            let normals = calc_normals(positions, raw_model.indices);
-            let normalBuffer = gl.createBuffer(); // create a new buffer
-            gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer); // bind to the new buffer
-            gl.bufferData(gl.ARRAY_BUFFER, normals, gl.STATIC_DRAW); // load the data into the buffer
-            gl.vertexAttribPointer(gl.program.aNormal, 3, gl.FLOAT, false, 0, 0); // associate the buffer with "aPosition" as length-2 vectors of floats
-            gl.enableVertexAttribArray(gl.program.aNormal); // enable this set of data
-            
-            // Load the index data onto the GPU
-            let indBuffer = gl.createBuffer(); // create a new buffer
-            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indBuffer); // bind to the new buffer
-            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, Uint16Array.from(raw_model.indices), gl.STATIC_DRAW); // load the data into the buffer
-            
-            // Cleanup
-            gl.bindVertexArray(null);
-            gl.bindBuffer(gl.ARRAY_BUFFER, null);
-            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+    const {defaultColor, isTriStrip} = optionalArgs;
 
-            // Return the VAO and number of indices
-            return [vao, raw_model.indices.length];
-        })
-        .catch(console.error);
+    // Create and bind the VAO
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+
+    // Load vertex coordinates into GPU
+    const coords = Float32Array.from(model.vertices);
+    loadArrayBuffer(coords, gl.program.aPosition, 3, gl.Float);
+    
+    // Load vertex normals into GPU
+    const normals = calc_normals(coords, model.indices, isTriStrip);
+    loadArrayBuffer(normals, gl.program.aNormal, 3, gl.Float);
+    
+    console.log(gl.program.aColor);
+
+    // Load vertex colors into GPU
+    {
+        let colors;
+        if (typeof defaultColor === "undefined") {
+            colors = Float32Array.from(model.colors);
+            loadArrayBuffer(colors, gl.program.aColor, 3, gl.Float);
+        } else {
+            colors = Array(coords.length / 3).fill(null).flatMap(() => defaultColor);
+        }
+        loadArrayBuffer(colors, gl.program.aColor, 3, gl.Float);
+    }
+
+    // Load index data into the GPU
+    const indBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, Uint16Array.from(model.indices), gl.STATIC_DRAW);
+    
+    // Cleanup
+    gl.bindVertexArray(null);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+
+    return {vao, count: model.indices.length};
+}
+
+/**
+ * Initializes optionalArgs with defaults
+ * and handles when its not an object.
+*/
+function initOptionalArgs(optionalArgs, defaults) {
+    const type = typeof optionalArgs;
+    if (type === "undefined") {
+        optionalArgs = {};
+    } else if (type !== "object") {
+        throw new Error("Invalid argument.");
+    }
+
+    return Object.assign(optionalArgs, defaults);
+}
+
+/**
+ * Creates and loads an array buffer into the GPU.
+ * Then attaches it to a location and enables it.
+ * values - an array of values to upload to the buffer.
+ * location - the location the buffer should attach to.
+ * numComponents - the number of components per attribute.
+ * numType - the type of the component.
+ */
+function loadArrayBuffer(values, location, numComponents, componentType) {
+    const buf = gl.createBuffer();
+    
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, values, gl.STATIC_DRAW);
+    gl.vertexAttribPointer(location, numComponents, componentType, false, 0, 0);
+    gl.enableVertexAttribArray(location);
+
+    return buf;
 }
 
 /**
@@ -193,7 +227,7 @@ function onWindowResize() {
     gl.canvas.width = gl.canvas.height = size;
     gl.canvas.style.width = gl.canvas.style.height = size + 'px';
     gl.viewport(0, 0, size, size);
-    updateProjectionMatrix();
+    //updateProjectionMatrix();
 }
 
 /**
@@ -203,35 +237,39 @@ function render() {
     return;
 }
 
-
-
 /**
  * Calculates the normals for the vertices given an array of vertices and array of indices to look
  * up into. The triangles are full triangles and not triangle strips.
- * The positions array must be a Float32Array with 3 values per vertex.
- * The indices can be a regular array or a typed array.
- * This returns a Float32Array of the normals with 3 values per vertex.
+ *
+ * Arguments:
+ *    coords - a Float32Array with 3 values per vertex
+ *    indices - a regular or typed array
+ *    is_tri_strip - defaults to true which means the indices represent a triangle strip
+ * Returns:
+ *    Float32Array of the normals with 3 values per vertex
  */
-function calc_normals(positions, indices) {
+function calc_normals(coords, indices, is_tri_strip) {
+    if (is_tri_strip !== true && is_tri_strip !== false) { is_tri_strip = true; }
+    
     // Start with all vertex normals as <0,0,0>
-    let normals = new Float32Array(positions.length);
+    let normals = new Float32Array(coords.length);
 
-    // Allocate temporary variables
-    let N_face = vec3.create();
-    let V = vec3.create();
-    let U = vec3.create();
+    // Get temporary variables
+    let [N_face, V, U] = [vec3.create(), vec3.create(), vec3.create()];
 
     // Calculate the face normals for each triangle then add them to the vertices
-    for (let i = 0; i < indices.length - 2; i += 3) {
-        // Get the indices of the triangle and then get pointers its positions and normals
+    let inc = is_tri_strip ? 1 : 3; // triangle strips only go up by 1 index per triangle
+    for (let i = 0; i < indices.length - 2; i += inc) {
+        // Get the indices of the triangle and then get pointers its coords and normals
         let j = indices[i]*3, k = indices[i+1]*3, l = indices[i+2]*3;
-        let A = positions.subarray(j, j+3), B = positions.subarray(k, k+3), C = positions.subarray(l, l+3);
+        let A = coords.subarray(j, j+3), B = coords.subarray(k, k+3), C = coords.subarray(l, l+3);
         let NA = normals.subarray(j, j+3), NB = normals.subarray(k, k+3), NC = normals.subarray(l, l+3);
 
         // Compute normal for the A, B, C triangle and save to N_face (will need to use V and U as temporaries as well)
-        vec3.subtract(V, B, A);
-        vec3.subtract(U, C, A);
-        vec3.cross(N_face, V, U);
+        vec3.cross(N_face, vec3.subtract(V, B, A), vec3.subtract(U, C, A));
+        if (is_tri_strip && (i%2) !== 0) { // every other triangle in a strip is actually reversed
+            vec3.negate(N_face, N_face);
+        }
 
         // Add N_face to the 3 normals of the triangle: NA, NB, and NC
         vec3.add(NA, N_face, NA); // NA += N_face
@@ -248,4 +286,3 @@ function calc_normals(positions, indices) {
     // Return the computed normals
     return normals;
 }
- 
