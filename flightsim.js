@@ -91,9 +91,9 @@ function initProgram() {
         const float materialShininess = 10.0;
         
         // Attenuation constants
-        const float lightConstantA = 0.05;
-        const float lightConstantB = 0.02;
-        const float lightConstantC = 0.02;
+        const float lightConstantA = 0.3;
+        const float lightConstantB = 0.3;
+        const float lightConstantC = 0.3;
 
         in vec3 vNormalVector;
         in vec3 vLightVector;
@@ -159,7 +159,7 @@ function initEvents() {
 }
 
 function initBuffers() {
-    const terrain = generate_mesh(generate_terrain(6, 0.1, Math.seedrandom(782378)));
+    const terrain = generate_mesh(generate_terrain(6, 0.001, Math.seedrandom(782378)));
     const terrainModel = {vertices: terrain[0], indices: terrain[1]};
 
     gl.terrain = loadModel(terrainModel, true);
@@ -262,11 +262,16 @@ function loadArrayBuffer(values, location, numComponents, componentType) {
  * Keep the canvas sized to the window.
  */
 function onWindowResize() {
+    gl.canvas.width = window.innerWidth;
+    gl.canvas.height = window.innerHeight;
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    /*
     let size = Math.min(window.innerWidth, window.innerHeight);
 
     gl.canvas.width = gl.canvas.height = size;
     gl.canvas.style.width = gl.canvas.style.height = size + 'px';
     gl.viewport(0, 0, size, size);
+    */
 
     updateProjectionMatrix();
 }
