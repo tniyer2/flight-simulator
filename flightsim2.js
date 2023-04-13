@@ -7,10 +7,8 @@ const vec3 = glMatrix.vec3;
 const mat4 = glMatrix.mat4;
 const quat = glMatrix.quat;
 
-
 // Global WebGL context variable
 let gl;
-
 
 window.addEventListener('load', function init() {
     // Get the HTML5 canvas object from it's ID
@@ -22,8 +20,8 @@ window.addEventListener('load', function init() {
     if (!gl) { window.alert("WebGL isn't available"); return; }
 
     // Configure WebGL
-    gl.clearColor(0.0, 0.0, 0.0, 1.0); // setup the background color with red, green, blue, and alpha
-    gl.enable(gl.DEPTH_TEST); // things further away will be hidden
+    gl.clearColor(0.5, 0.0, 1.0, 1.0);
+    gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.CULL_FACE);
     
     // Initialize the WebGL program and data
@@ -38,7 +36,6 @@ window.addEventListener('load', function init() {
     render();
 });
 
-
 /**
  * Initializes the WebGL program.
  */
@@ -50,9 +47,9 @@ function initProgram() {
         precision mediump float;
 
         uniform vec4 uLight; // Light position
-        uniform mat4 uModelViewMatrix;
+        uniform mat4 uModelMatrix;
+        uniform mat4 uViewMatrix;
         uniform mat4 uProjectionMatrix;
-        uniform mat4 uView;
 
         in vec4 aPosition;
         in vec3 aNormal;
@@ -61,13 +58,16 @@ function initProgram() {
         out vec3 vNormalVector;
         out vec3 vLightVector;
         out vec3 vEyeVector;
+
         flat out vec3 vColor;
 
         void main() {
-            vec4 P = uModelViewMatrix * aPosition;
+            mat4 modelViewMatrix = uViewMatrix * uModelMatrix;
+            vec4 P = modelViewMatrix * aPosition;
 
-            vNormalVector = mat3(uModelViewMatrix) * aNormal;
-            vLightVector = (uLight.w == 1.0) ? (P - (uView * uLight)).xyz : (uView * uLight).xyz;
+            vNormalVector = mat3(modelViewMatrix) * aNormal;
+            vec4 light = uViewMatrix * uLight;
+            vLightVector = (light.w == 1.0) ? (P - light).xyz : light.xyz;
             vEyeVector = -P.xyz; // from position to camera
 
             gl_Position = uProjectionMatrix * P;
@@ -144,108 +144,102 @@ function initProgram() {
     program.aColor = gl.getAttribLocation(program, 'aColor');
 
     // Get the uniform indices
-    program.uModelViewMatrix = gl.getUniformLocation(program, 'uModelViewMatrix');
+    program.uModelMatrix = gl.getUniformLocation(program, 'uModelMatrix');
     program.uProjectionMatrix = gl.getUniformLocation(program, 'uProjectionMatrix');
-    program.uView = gl.getUniformLocation(program, 'uView');
+    program.uViewMatrix = gl.getUniformLocation(program, 'uViewMatrix');
     program.uLight = gl.getUniformLocation(program, 'uLight');
 
     return program;
 }
 
-
 /**
  * Initialize the data buffers.
  */
 function initBuffers() {
-    const terrain = generate_mesh(generate_terrain(6, 0.1, Math.seedrandom(782378)));  // 782378
-    gl.terrain = loadModel(terrain[0], null, terrain[1], true);
+    {
+        const seed = 782378;
+        let terrain = generate_terrain(7, 0.01, Math.seedrandom(seed));
+        let [terrainVertices, terrainIndices] = generate_mesh(terrain);
+        gl.terrain = loadModel(terrainVertices, null, terrainIndices, true);
+    }
 
-    // The vertices, colors, and indices for a cube
-    let cube_coords = [
-        1, 1, 1, // A
-        -1, 1, 1, // B
-        -1, -1, 1, // C
-        1, -1, 1, // D
-        1, -1, -1, // E
-        -1, -1, -1, // F
-        -1, 1, -1, // G
-        1, 1, -1, // H
-    ];
-    let cube_colors = [
-        1, 0, 0, // red
-        1, 1, 0, // yellow
-        0, 1, 0, // green
-        0, 0, 0, // black (color is not actually used)
-        0, 1, 1, // cyan
-        0, 0, 1, // blue
-        0, 0, 0, // black (color is not actually used)
-        1, 0, 1, // purple
-    ];
-    let cube_indices = [
-        1, 2, 0, 2, 3, 0,
-        7, 6, 1, 0, 7, 1,
-        1, 6, 2, 6, 5, 2,
-        3, 2, 4, 2, 5, 4,
-        6, 7, 5, 7, 4, 5,
-        0, 3, 7, 3, 4, 7,
-    ];
-    gl.cube = loadModel(cube_coords, cube_colors, cube_indices);
+    {
+        let cube_coords = [
+            1, 1, 1, // A
+            -1, 1, 1, // B
+            -1, -1, 1, // C
+            1, -1, 1, // D
+            1, -1, -1, // E
+            -1, -1, -1, // F
+            -1, 1, -1, // G
+            1, 1, -1, // H
+        ];
+        let cube_colors = [
+            1, 0, 0, // red
+            1, 1, 0, // yellow
+            0, 1, 0, // green
+            0, 0, 0, // black (color is not actually used)
+            0, 1, 1, // cyan
+            0, 0, 1, // blue
+            0, 0, 0, // black (color is not actually used)
+            1, 0, 1, // purple
+        ];
+        let cube_indices = [
+            1, 2, 0, 2, 3, 0,
+            7, 6, 1, 0, 7, 1,
+            1, 6, 2, 6, 5, 2,
+            3, 2, 4, 2, 5, 4,
+            6, 7, 5, 7, 4, 5,
+            0, 3, 7, 3, 4, 7,
+        ];
+        gl.cube = loadModel(cube_coords, cube_colors, cube_indices);
+    }
 
-
-    let tetra_coords = [
-        0, 0, 1,
-        0, Math.sqrt(8/9), -1/3,
-        Math.sqrt(2/3), -Math.sqrt(2/9), -1/3,
-        -Math.sqrt(2/3), -Math.sqrt(2/9), -1/3,
-    ];
-    let tetra_colors = [
-        1, 0, 0, // red
-        0, 1, 0, // green
-        0, 0, 1, // blue
-        1, 1, 1, // white
-    ];
-    let tetra_indices = [1, 3, 0, 2, 1, 3];
-    gl.tetra = loadModel(tetra_coords, tetra_colors, tetra_indices, true);
+    {
+        let tetra_coords = [
+            0, 0, 1,
+            0, Math.sqrt(8/9), -1/3,
+            Math.sqrt(2/3), -Math.sqrt(2/9), -1/3,
+            -Math.sqrt(2/3), -Math.sqrt(2/9), -1/3,
+        ];
+        let tetra_colors = [
+            1, 0, 0, // red
+            0, 1, 0, // green
+            0, 0, 1, // blue
+            1, 1, 1, // white
+        ];
+        let tetra_indices = [1, 3, 0, 2, 1, 3];
+        gl.tetra = loadModel(tetra_coords, tetra_colors, tetra_indices, true);
+    }
 }
 
 /**
  * Loads a model into GPU with the coordinates, colors, and indices provided.
  */
 function loadModel(coords, colors, indices, useStrips) {
+    useStrips = useStrips === true;
+
     // Create and bind VAO
     let vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
-
+    
+    // Load vertex positions into GPU
     coords = Float32Array.from(coords);
+    loadArrayBuffer(coords, gl.program.aPosition, 3, gl.FLOAT);
 
-    // Load the coordinate data into the GPU and associate with shader
-    let buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, coords, gl.STATIC_DRAW);
-    gl.vertexAttribPointer(gl.program.aPosition, 3, gl.FLOAT, false, 0, 0);
-    gl.enableVertexAttribArray(gl.program.aPosition);
+    // Load vertex normals into GPU
+    const normals = calc_normals(coords, indices, useStrips)
+    loadArrayBuffer(normals, gl.program.aNormal, 3, gl.FLOAT);
 
-    // Load the normal data into the GPU and associate with shader
-    buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, calc_normals(coords, indices, useStrips === true), gl.STATIC_DRAW);
-    gl.vertexAttribPointer(gl.program.aNormal, 3, gl.FLOAT, false, 0, 0);
-    gl.enableVertexAttribArray(gl.program.aNormal);
-
-    // Load the colors data into the GPU and associate with shader
     if (colors === null) {
         colors = Array(coords.length / 3).fill(null).flatMap(() => [0, 1, 0]);
     }
-
-    buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, Float32Array.from(colors), gl.STATIC_DRAW);
-    gl.vertexAttribPointer(gl.program.aColor, 3, gl.FLOAT, false, 0, 0);
-    gl.enableVertexAttribArray(gl.program.aColor);
+    
+    // Load vertex colors into GPU
+    loadArrayBuffer(Float32Array.from(colors), gl.program.aColor, 3, gl.FLOAT);
 
     // Load the index data into the GPU
-    buf = gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, Uint16Array.from(indices), gl.STATIC_DRAW);
 
     // Cleanup
@@ -253,10 +247,29 @@ function loadModel(coords, colors, indices, useStrips) {
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
 
-    let mode = useStrips === true ? gl.TRIANGLE_STRIP : gl.TRIANGLES;
+    const mode = useStrips ? gl.TRIANGLE_STRIP : gl.TRIANGLES;
 
     // Return the Model
     return { vao, mode, count: indices.length, transform: mat4.create() };
+}
+
+/**
+ * Creates and loads an array buffer into the GPU.
+ * Then attaches it to a location and enables it.
+ * values - an array of values to upload to the buffer.
+ * location - the location the buffer should attach to.
+ * numComponents - the number of components per attribute.
+ * numType - the type of the component.
+ */
+function loadArrayBuffer(values, location, numComponents, componentType) {
+    const buf = gl.createBuffer();
+    
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, values, gl.STATIC_DRAW);
+    gl.vertexAttribPointer(location, numComponents, componentType, false, 0, 0);
+    gl.enableVertexAttribArray(location);
+
+    return buf;
 }
 
 /**
@@ -266,17 +279,18 @@ function initEvents() {
     window.addEventListener('resize', onWindowResize);
 }
 
-
 /**
  * Keep the canvas sized to the window.
  */
 function onWindowResize() {
-    gl.canvas.width = window.innerWidth;
-    gl.canvas.height = window.innerHeight;
-    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    const size = Math.min(window.innerWidth, window.innerHeight);
+
+    gl.canvas.width = size;
+    gl.canvas.height = size;
+    gl.viewport(0, 0, size, size);
+
     updateProjectionMatrix();
 }
-
 
 /**
  * Render the scene.
@@ -294,11 +308,9 @@ function render(ms) {
         let isTopView = true;
         
         if (isTopView) {
-            const translation = mat4.fromTranslation(mat4.create(), [0, 40, 0]);
-            const rotation = angleAxisToMat4(-135, [1, 0, 0]);
-            const translation2 = mat4.fromTranslation(mat4.create(), [0, 40, 0]);
+            const translation = mat4.fromTranslation(mat4.create(), [0, -20, 0]);
+            const rotation = angleAxisToMat4(90, [1, 0, 0]);
 
-            mat4.multiply(view, view, translation2);
             mat4.multiply(view, view, rotation);
             mat4.multiply(view, view, translation);
         } else {
@@ -333,23 +345,18 @@ function render(ms) {
         {
             t = gl.terrain.transform;
             mat4.identity(t);
-            mat4.multiply(t, t, angleAxisToMat4(0 / 10, [1, 1, 1]));
+            mat4.multiply(t, t, angleAxisToMat4(180, [0, 0, 1]));
             mat4.multiply(t, t, mat4.fromScaling(mat4.create(), [20, 1, 20]));
         }
     }
 
-    // update light
-    {
-        gl.uniformMatrix4fv(gl.program.uView, false, view);
-        gl.uniform4fv(gl.program.uLight, [0, 0, 0, 1]);
-    }
+    gl.uniformMatrix4fv(gl.program.uViewMatrix, false, view);
+    gl.uniform4fv(gl.program.uLight, [0, 0, 0, 1]);
 
     // For each orbiting object, draw the object
     {
         const draw = function (model) {
-            const mv = mat4.multiply(mat4.create(), view, model.transform);
-
-            gl.uniformMatrix4fv(gl.program.uModelViewMatrix, false, mv);
+            gl.uniformMatrix4fv(gl.program.uModelMatrix, false, model.transform);
 
             gl.bindVertexArray(model.vao);
             gl.drawElements(model.mode, model.count, gl.UNSIGNED_SHORT, 0);
@@ -364,7 +371,6 @@ function render(ms) {
 
     window.requestAnimationFrame(render);
 }
-
 
 /**
  * Computers the transform for an orbit.
@@ -407,7 +413,6 @@ function computeOrbitTransform(matrix, timeInMs, offsetYear, center, orbitDistan
     mat4.multiply(matrix, matrix, rotateDay);
 }
 
-
 /**
  * converts from angle-axis to quaternion.
  * angle: angle in degrees.
@@ -431,13 +436,11 @@ function angleAxisToQuat(angle, axis) {
     return q;
 }
 
-
 function angleAxisToMat4(angle, axis) {
     const q = angleAxisToQuat(angle, axis);
     
     return mat4.fromQuat(mat4.create(), q);
 }
-
 
 // Converts an angle in degrees to radians.
 function degrees2radians(angle) {
@@ -467,7 +470,6 @@ function updateProjectionMatrix() {
 
     gl.uniformMatrix4fv(gl.program.uProjectionMatrix, false, mv);
 }
-
 
 /**
  * Calculates the normals for the vertices given an array of vertices and array of indices to look
