@@ -22,7 +22,7 @@ window.addEventListener('load', function init() {
     // Configure WebGL
     gl.clearColor(0.1, 0.8, 1.0, 1.0);
     gl.enable(gl.DEPTH_TEST);
-    // gl.enable(gl.CULL_FACE);
+    gl.enable(gl.CULL_FACE);
     
     // Initialize the WebGL program and data
     gl.program = initProgram();
@@ -53,6 +53,7 @@ function initProgram() {
         precision mediump float;
 
         uniform vec4 uLight; // Light position
+        uniform float uLightIntensity;
         uniform mat4 uModelMatrix;
         uniform mat4 uCameraMatrix;
         uniform mat4 uProjectionMatrix;
@@ -64,6 +65,8 @@ function initProgram() {
         out vec3 vNormalVector;
         out vec3 vLightVector;
         out vec3 vEyeVector;
+
+        out float vLightIntensity;
 
         flat out vec3 vColor;
 
@@ -77,6 +80,7 @@ function initProgram() {
             vec4 light = viewMatrix * uLight;
             vLightVector = (light.w == 1.0) ? (P - light).xyz : light.xyz;
             vEyeVector = -P.xyz; // from position to camera
+            vLightIntensity = uLightIntensity;
 
             gl_Position = uProjectionMatrix * P;
             vColor = aColor;
@@ -90,7 +94,7 @@ function initProgram() {
 
         // Light constants
         const vec3 lightColor = normalize(vec3(1.0, 1.0, 1.0));
-        const float lightIntensity = 4.0;
+        in float vLightIntensity;
 
         // Material constants
         const float materialAmbient = 0.2;
@@ -136,7 +140,7 @@ function initProgram() {
             float D = materialDiffuse * diffuse * attenuation;
             float S = materialSpecular * specular * attenuation;
 
-            fragColor.rgb = (((A + D) * vColor) + S) * lightColor * lightIntensity;
+            fragColor.rgb = (((A + D) * vColor) + S) * lightColor * vLightIntensity;
             fragColor.a = 1.0;
         }
         `
@@ -156,6 +160,7 @@ function initProgram() {
     program.uProjectionMatrix = gl.getUniformLocation(program, 'uProjectionMatrix');
     program.uCameraMatrix = gl.getUniformLocation(program, 'uCameraMatrix');
     program.uLight = gl.getUniformLocation(program, 'uLight');
+    program.uLightIntensity = gl.getUniformLocation(program, 'uLightIntensity');
 
     return program;
 }
@@ -323,10 +328,24 @@ function runFrame() {
  * Render the scene.
  */
 function render() {
+    const ms = performance.now();
+
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     gl.uniformMatrix4fv(gl.program.uCameraMatrix, false, gl.world.camera.transform);
-    gl.uniform4fv(gl.program.uLight, [-1, -1, -1, 0]);
+
+    const angle = (90 + ((ms) / 24)) % 360;
+    if (angle < 180) {
+        const negativeZ = [0, 0, 1];
+        vec3.transformMat4(negativeZ, negativeZ, angleAxisToMat4(angle, [1, 0, 0]));
+
+        gl.uniform4fv(gl.program.uLight, [...negativeZ, 0]);
+        gl.uniform1f(gl.program.uLightIntensity, 4);
+    } else {
+        gl.uniform4fv(gl.program.uLight, [0, -1, 0, 0]);
+        gl.uniform1f(gl.program.uLightIntensity, 1);
+    }
+
 
     const draw = function (obj) {
         if (obj.type === "model") {
