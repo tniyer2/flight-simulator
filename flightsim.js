@@ -20,13 +20,14 @@ window.addEventListener('load', function init() {
     if (!gl) { window.alert("WebGL isn't available"); return; }
 
     // Configure WebGL
-    gl.clearColor(0.5, 0.0, 1.0, 1.0);
+    gl.clearColor(0.1, 0.8, 1.0, 1.0);
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.CULL_FACE);
     
     // Initialize the WebGL program and data
     gl.program = initProgram();
     initBuffers();
+    initTransforms();
     initEvents();
 
     // Set initial values of uniforms
@@ -48,7 +49,7 @@ function initProgram() {
 
         uniform vec4 uLight; // Light position
         uniform mat4 uModelMatrix;
-        uniform mat4 uViewMatrix;
+        uniform mat4 uCameraMatrix;
         uniform mat4 uProjectionMatrix;
 
         in vec4 aPosition;
@@ -62,11 +63,13 @@ function initProgram() {
         flat out vec3 vColor;
 
         void main() {
-            mat4 modelViewMatrix = uViewMatrix * uModelMatrix;
+            mat4 viewMatrix = inverse(uCameraMatrix);
+            mat4 modelViewMatrix = viewMatrix * uModelMatrix;
+
             vec4 P = modelViewMatrix * aPosition;
 
             vNormalVector = mat3(modelViewMatrix) * aNormal;
-            vec4 light = uViewMatrix * uLight;
+            vec4 light = viewMatrix * uLight;
             vLightVector = (light.w == 1.0) ? (P - light).xyz : light.xyz;
             vEyeVector = -P.xyz; // from position to camera
 
@@ -146,7 +149,7 @@ function initProgram() {
     // Get the uniform indices
     program.uModelMatrix = gl.getUniformLocation(program, 'uModelMatrix');
     program.uProjectionMatrix = gl.getUniformLocation(program, 'uProjectionMatrix');
-    program.uViewMatrix = gl.getUniformLocation(program, 'uViewMatrix');
+    program.uCameraMatrix = gl.getUniformLocation(program, 'uCameraMatrix');
     program.uLight = gl.getUniformLocation(program, 'uLight');
 
     return program;
@@ -156,15 +159,22 @@ function initProgram() {
  * Initialize the data buffers.
  */
 function initBuffers() {
-    {
-        const seed = 782378;
-        let terrain = generate_terrain(7, 0.01, Math.seedrandom(seed));
-        let [terrainVertices, terrainIndices] = generate_mesh(terrain);
-        gl.terrain = loadModel(terrainVertices, null, terrainIndices, true);
-    }
+    gl.world = createDefaultWorld();
 
+    // Create the camera
+    let camera = mat4.create();
     {
-        let cube_coords = [
+        const translation = mat4.fromTranslation(mat4.create(), [0, 0.5, 10]);
+        const rotation = angleAxisToMat4(-10, [1, 0, 0]);
+
+        mat4.multiply(camera, camera, translation);
+        mat4.multiply(camera, camera, rotation);
+    }
+    gl.world.camera = {transform: camera};
+
+    // Load drone model into GPU
+    {
+        const cube_coords = [
             1, 1, 1, // A
             -1, 1, 1, // B
             -1, -1, 1, // C
@@ -174,7 +184,8 @@ function initBuffers() {
             -1, 1, -1, // G
             1, 1, -1, // H
         ];
-        let cube_colors = [
+
+        const cube_colors = [
             1, 0, 0, // red
             1, 1, 0, // yellow
             0, 1, 0, // green
@@ -184,7 +195,8 @@ function initBuffers() {
             0, 0, 0, // black (color is not actually used)
             1, 0, 1, // purple
         ];
-        let cube_indices = [
+
+        const cube_indices = [
             1, 2, 0, 2, 3, 0,
             7, 6, 1, 0, 7, 1,
             1, 6, 2, 6, 5, 2,
@@ -192,25 +204,26 @@ function initBuffers() {
             6, 7, 5, 7, 4, 5,
             0, 3, 7, 3, 4, 7,
         ];
-        gl.cube = loadModel(cube_coords, cube_colors, cube_indices);
+
+        gl.drone = loadModel(cube_coords, cube_colors, cube_indices);
     }
 
+    // Generate and load terrain into GPU
     {
-        let tetra_coords = [
-            0, 0, 1,
-            0, Math.sqrt(8/9), -1/3,
-            Math.sqrt(2/3), -Math.sqrt(2/9), -1/3,
-            -Math.sqrt(2/3), -Math.sqrt(2/9), -1/3,
-        ];
-        let tetra_colors = [
-            1, 0, 0, // red
-            0, 1, 0, // green
-            0, 0, 1, // blue
-            1, 1, 1, // white
-        ];
-        let tetra_indices = [1, 3, 0, 2, 1, 3];
-        gl.tetra = loadModel(tetra_coords, tetra_colors, tetra_indices, true);
+        const seed = 782378;
+        const terrain = generate_terrain(7, 0.01, Math.seedrandom(seed));
+        let [terrainVertices, terrainIndices] = generate_mesh(terrain);
+        gl.terrain = loadModel(terrainVertices, null, terrainIndices, true);
     }
+}
+
+function createDefaultWorld() {
+    return {
+        type: "world", 
+        transform: mat4.identity(mat4.create()), 
+        children: [],
+        camera: null
+    };
 }
 
 /**
@@ -247,10 +260,13 @@ function loadModel(coords, colors, indices, useStrips) {
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
 
+    const count = indices.length;
     const mode = useStrips ? gl.TRIANGLE_STRIP : gl.TRIANGLES;
+    const transform = mat4.identity(mat4.create());
 
-    // Return the Model
-    return { vao, mode, count: indices.length, transform: mat4.create() };
+    const object = { vao, count, mode, transform, children: [] };
+
+    return object
 }
 
 /**
@@ -272,11 +288,27 @@ function loadArrayBuffer(values, location, numComponents, componentType) {
     return buf;
 }
 
+function initTransforms() {
+    // compute drone's transform
+    {
+        const t = gl.drone.transform;
+        scaleByConstant(t, 1);
+    }
+
+    // compute terrain's transform
+    {
+        const t = gl.terrain.transform;
+        mat4.multiply(t, t, mat4.fromScaling(mat4.create(), [20, 10, 20]));
+        mat4.multiply(t, t, angleAxisToMat4(180, [0, 0, 1]));
+    }
+}
+
 /**
  * Initialize event handlers
  */
 function initEvents() {
     window.addEventListener('resize', onWindowResize);
+    window.addEventListener('keydown', onKeyDown);
 }
 
 /**
@@ -302,56 +334,8 @@ function render(ms) {
     // If it is not provided (i.e. render is directly called) then this if statement will grab the current time
     if (!ms) { ms = performance.now(); }
 
-    // Compute the "view" part of the Model-View matrix
-    let view = mat4.create();
-    {
-        let isTopView = true;
-        
-        if (isTopView) {
-            const translation = mat4.fromTranslation(mat4.create(), [0, -20, 0]);
-            const rotation = angleAxisToMat4(90, [1, 0, 0]);
-
-            mat4.multiply(view, view, rotation);
-            mat4.multiply(view, view, translation);
-        } else {
-            mat4.fromTranslation(view, [0, 0, -4]);
-        }
-    }
-
-    // For each orbiting object, compute its transform
-    {
-        const center = [0, 0, 0];
-        let t;
-
-        // compute cube's transform
-        {
-            t = gl.cube.transform;
-            mat4.identity(t);
-            computeOrbitTransform(t, 0, 0, center, 1, 6, 5);
-            scaleByConstant(t, 0.2);
-        }
-
-        // compute tetrahedron's transform
-        {
-            t = gl.tetra.transform;
-            mat4.identity(t);
-            computeOrbitTransform(t, 0, 0.5, center, 2, 3, 10);
-            scaleByConstant(t, 0.4);
-            
-            // fix tetrahedron's tilt
-            mat4.multiply(t, t, angleAxisToMat4(20, [1, 0, 0]));
-        }
-
-        {
-            t = gl.terrain.transform;
-            mat4.identity(t);
-            mat4.multiply(t, t, angleAxisToMat4(180, [0, 0, 1]));
-            mat4.multiply(t, t, mat4.fromScaling(mat4.create(), [20, 1, 20]));
-        }
-    }
-
-    gl.uniformMatrix4fv(gl.program.uViewMatrix, false, view);
-    gl.uniform4fv(gl.program.uLight, [0, 0, 0, 1]);
+    gl.uniformMatrix4fv(gl.program.uCameraMatrix, false, gl.world.camera.transform);
+    gl.uniform4fv(gl.program.uLight, [-1, -1, -1, 0]);
 
     // For each orbiting object, draw the object
     {
@@ -362,55 +346,13 @@ function render(ms) {
             gl.drawElements(model.mode, model.count, gl.UNSIGNED_SHORT, 0);
         }
 
-        draw(gl.cube);
-        draw(gl.tetra);
+        draw(gl.drone);
         draw(gl.terrain);
 
         gl.bindVertexArray(null);
     }
 
     window.requestAnimationFrame(render);
-}
-
-/**
- * Computers the transform for an orbit.
- * Modulo is used so timeInMs doesn't have to start at 0
- * for it to work.
- * @param {*} matrix - mat4 matrix to save orbit transform to.
- * @param {*} timeInMs - time in ms.
- * @param {*} offsetYear - number between 0 and 1 to offset rotation by. (1 does nothing)
- * @param {*} center - vec3 center of the orbit.
- * @param {*} orbitDistance - float distance of orbiting object from the center.
- * @param {*} dayPeriod - number of seconds for object to revolve once around its own y-axis.
- * @param {*} yearPeriod - number of seconds for object to revole once around the center.
- */
-function computeOrbitTransform(matrix, timeInMs, offsetYear, center, orbitDistance, dayPeriod, yearPeriod) {
-    const timeInSecs = timeInMs / 1000;
-
-    const rotateYear = angleAxisToMat4(
-        (((timeInSecs % yearPeriod) / yearPeriod) + offsetYear) * 360,
-        [0, 1, 0]
-    );
-
-    const rotateDay = angleAxisToMat4(
-        ((timeInSecs % dayPeriod) / dayPeriod) * 360,
-        [0, 1, 0]
-    );
-
-    const translateDistance = mat4.fromTranslation(
-        mat4.create(),
-        [0, 0, orbitDistance]
-    );
-
-    const translateCenter = mat4.fromTranslation(
-        mat4.create(),
-        center
-    );
-
-    mat4.multiply(matrix, matrix, translateCenter);
-    mat4.multiply(matrix, matrix, rotateYear);
-    mat4.multiply(matrix, matrix, translateDistance);
-    mat4.multiply(matrix, matrix, rotateDay);
 }
 
 /**
@@ -469,6 +411,58 @@ function updateProjectionMatrix() {
     // const mv = mat4.ortho(mat4.create(), -2, 2, -2, 2, 10, -10);
 
     gl.uniformMatrix4fv(gl.program.uProjectionMatrix, false, mv);
+}
+
+/**
+ * When up or down arrows are pressed, change the radius of the circle.
+ */
+function onKeyDown(e) {
+    e.preventDefault()
+
+    const transform = mat4.create();
+
+    /**
+     * up/down arrow    - translate z-axis
+     * 
+     * left/right arrow - rotate around the y-axis
+     * W/S key          - rotate around the x-axis
+     * A/D key          - rotate around z-axis
+     */
+    if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key ==="ArrowLeft" || e.key ==="ArrowRight") {
+        // Get the current camera position 
+
+        // moves forward/backward based on the direction it is facing
+        if (e.key === "ArrowUp") {
+            mat4.fromTranslation(transform, [0, 0, -1]);
+            console.log("key up pressed")
+        } else if (e.key === "ArrowDown") {
+            mat4.fromTranslation(transform, [0, 0, 1]);
+            console.log("key down pressed")
+        } else if (e.key ==="ArrowLeft") { // rotate on x axis (Yaw)
+            mat4.rotateY(transform, degrees2radians(1));
+            console.log("key left pressed")
+        } else { // e.key === "Arrow Right"
+            mat4.rotateY(transform, degrees2radians(-1));
+            console.log("key right pressed")
+        }
+    }
+
+    if (e.key === "a" || e.key === "d" || e.key === "w" || e.key === "s") {
+        
+        // Pitch Rotate on Y axis
+        if (e.key === "w") {               // W
+            console.log("key W pressed")
+        } else if (e.key === "s") {        // S
+            console.log("key S pressed")
+        } else if (e.key ==="a") {         // A
+            console.log("key A pressed")
+        } else { // e.key === "68"          // D
+            console.log("key D pressed")
+        }
+    }
+
+    const cur = gl.world.camera.transform;
+    mat4.multiply(cur, cur, transform);
 }
 
 /**
