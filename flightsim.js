@@ -332,23 +332,31 @@ function render() {
 
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    gl.uniformMatrix4fv(gl.program.uCameraMatrix, false, gl.world.camera.transform);
+    // Calculate directional light for day/night cycle
+    {
+        const dayNightPeriodInSecs = 30;
+        const dayNightRatio = ((ms / 1000) % dayNightPeriodInSecs) / dayNightPeriodInSecs;
+        let angle = dayNightRatio * 360;
 
-    const angle = (((ms) / 24)) % 360;
-    if (angle < 180) {
+        const baseIntensity = 1;
+        const extraDayIntensity = 1;
+        let intensity;
+        
+        if (angle < 180) {
+            intensity = baseIntensity + (extraDayIntensity * Math.sin(degreesToRadians(angle)));
+        } else {
+            angle = 360 - angle;
+            intensity = baseIntensity;
+        }
+        
         const negativeZ = [0, 0, 1];
         vec3.transformMat4(negativeZ, negativeZ, angleAxisToMat4(angle, [1, 0, 0]));
-
+        
         gl.uniform4fv(gl.program.uLight, [...negativeZ, 0]);
-        gl.uniform1f(gl.program.uLightIntensity, 1 + Math.sin(degreesToRadians(angle)));
-    } else {
-        const negativeZ = [0, 0, 1];
-        vec3.transformMat4(negativeZ, negativeZ, angleAxisToMat4(180, [1, 0, 0]));
-
-        gl.uniform4fv(gl.program.uLight, [...negativeZ, 0]);
-        gl.uniform1f(gl.program.uLightIntensity, 1);
+        gl.uniform1f(gl.program.uLightIntensity, intensity);
     }
-
+    
+    gl.uniformMatrix4fv(gl.program.uCameraMatrix, false, gl.world.camera.transform);
 
     const draw = function (obj) {
         if (obj.type === "model") {
@@ -539,7 +547,7 @@ function collision_detection() {
     } // adds a vector(triangle) the the octree
 
     octree.findNearestPoint(); // takes a vector as param, and find nearest points of a vector
-}
+}``
 
 
 /**
