@@ -217,6 +217,139 @@ function initBuffers() {
     }
 }
 
+function initTransforms() {
+    // compute drone's transform
+    {
+        const t = gl.drone.transform;
+        scaleByConstant(t, 1);
+    }
+
+    // compute terrain's transform
+    {
+        const t = gl.terrain.transform;
+        mat4.multiply(t, t, mat4.fromScaling(mat4.create(), [20, 10, 20]));
+        mat4.multiply(t, t, angleAxisToMat4(180, [0, 0, 1]));
+    }
+}
+
+/**
+ * Initialize event handlers
+ */
+function initEvents() {
+    window.addEventListener('resize', onWindowResize);
+    window.addEventListener('keydown', onKeyDown);
+}
+
+/**
+ * Keep the canvas sized to the window.
+ */
+function onWindowResize() {
+    const size = Math.min(window.innerWidth, window.innerHeight);
+
+    gl.canvas.width = size;
+    gl.canvas.height = size;
+    gl.viewport(0, 0, size, size);
+
+    updateProjectionMatrix();
+}
+
+/**
+ * Updates the projection transformation matrix.
+ */
+function updateProjectionMatrix() {
+    let [w, h] = [gl.canvas.width, gl.canvas.height];
+
+    const mv = mat4.perspective(mat4.create(), degrees2radians(90), w / h, 0.0001, 100);
+
+    // for debugging
+    // const mv = mat4.ortho(mat4.create(), -2, 2, -2, 2, 10, -10);
+
+    gl.uniformMatrix4fv(gl.program.uProjectionMatrix, false, mv);
+}
+
+/**
+ * When up or down arrows are pressed, change the radius of the circle.
+ */
+function onKeyDown(e) {
+    e.preventDefault()
+
+    const transform = mat4.create();
+
+    /**
+     * up/down arrow    - translate z-axis
+     * 
+     * left/right arrow - rotate around the y-axis
+     * W/S key          - rotate around the x-axis
+     * A/D key          - rotate around z-axis
+     */
+    if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key ==="ArrowLeft" || e.key ==="ArrowRight") {
+        // Get the current camera position 
+
+        // moves forward/backward based on the direction it is facing
+        if (e.key === "ArrowUp") {
+            mat4.fromTranslation(transform, [0, 0, -1]);
+            console.log("key up pressed")
+        } else if (e.key === "ArrowDown") {
+            mat4.fromTranslation(transform, [0, 0, 1]);
+            console.log("key down pressed")
+        } else if (e.key ==="ArrowLeft") { // rotate on x axis (Yaw)
+            mat4.rotateY(transform, degrees2radians(1));
+            console.log("key left pressed")
+        } else { // e.key === "Arrow Right"
+            mat4.rotateY(transform, degrees2radians(-1));
+            console.log("key right pressed")
+        }
+    }
+
+    if (e.key === "a" || e.key === "d" || e.key === "w" || e.key === "s") {
+        
+        // Pitch Rotate on Y axis
+        if (e.key === "w") {               // W
+            console.log("key W pressed")
+        } else if (e.key === "s") {        // S
+            console.log("key S pressed")
+        } else if (e.key ==="a") {         // A
+            console.log("key A pressed")
+        } else { // e.key === "68"          // D
+            console.log("key D pressed")
+        }
+    }
+
+    const cur = gl.world.camera.transform;
+    mat4.multiply(cur, cur, transform);
+}
+
+/**
+ * Render the scene.
+ */
+function render(ms) {
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    // The ms value is the number of miliseconds since some arbitrary time in the past
+    // If it is not provided (i.e. render is directly called) then this if statement will grab the current time
+    if (!ms) { ms = performance.now(); }
+
+    gl.uniformMatrix4fv(gl.program.uCameraMatrix, false, gl.world.camera.transform);
+    gl.uniform4fv(gl.program.uLight, [-1, -1, -1, 0]);
+
+    // For each orbiting object, draw the object
+    {
+        const draw = function (model) {
+            gl.uniformMatrix4fv(gl.program.uModelMatrix, false, model.transform);
+
+            gl.bindVertexArray(model.vao);
+            gl.drawElements(model.mode, model.count, gl.UNSIGNED_SHORT, 0);
+        }
+
+        draw(gl.drone);
+        draw(gl.terrain);
+
+        gl.bindVertexArray(null);
+    }
+
+    window.requestAnimationFrame(render);
+}
+
 function createDefaultWorld() {
     return {
         type: "world", 
@@ -288,73 +421,6 @@ function loadArrayBuffer(values, location, numComponents, componentType) {
     return buf;
 }
 
-function initTransforms() {
-    // compute drone's transform
-    {
-        const t = gl.drone.transform;
-        scaleByConstant(t, 1);
-    }
-
-    // compute terrain's transform
-    {
-        const t = gl.terrain.transform;
-        mat4.multiply(t, t, mat4.fromScaling(mat4.create(), [20, 10, 20]));
-        mat4.multiply(t, t, angleAxisToMat4(180, [0, 0, 1]));
-    }
-}
-
-/**
- * Initialize event handlers
- */
-function initEvents() {
-    window.addEventListener('resize', onWindowResize);
-    window.addEventListener('keydown', onKeyDown);
-}
-
-/**
- * Keep the canvas sized to the window.
- */
-function onWindowResize() {
-    const size = Math.min(window.innerWidth, window.innerHeight);
-
-    gl.canvas.width = size;
-    gl.canvas.height = size;
-    gl.viewport(0, 0, size, size);
-
-    updateProjectionMatrix();
-}
-
-/**
- * Render the scene.
- */
-function render(ms) {
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
-    // The ms value is the number of miliseconds since some arbitrary time in the past
-    // If it is not provided (i.e. render is directly called) then this if statement will grab the current time
-    if (!ms) { ms = performance.now(); }
-
-    gl.uniformMatrix4fv(gl.program.uCameraMatrix, false, gl.world.camera.transform);
-    gl.uniform4fv(gl.program.uLight, [-1, -1, -1, 0]);
-
-    // For each orbiting object, draw the object
-    {
-        const draw = function (model) {
-            gl.uniformMatrix4fv(gl.program.uModelMatrix, false, model.transform);
-
-            gl.bindVertexArray(model.vao);
-            gl.drawElements(model.mode, model.count, gl.UNSIGNED_SHORT, 0);
-        }
-
-        draw(gl.drone);
-        draw(gl.terrain);
-
-        gl.bindVertexArray(null);
-    }
-
-    window.requestAnimationFrame(render);
-}
-
 /**
  * converts from angle-axis to quaternion.
  * angle: angle in degrees.
@@ -397,72 +463,6 @@ function scaleByConstant(matrix, value) {
     );
 
     mat4.multiply(matrix, matrix, scaling);
-}
-
-/**
- * Updates the projection transformation matrix.
- */
-function updateProjectionMatrix() {
-    let [w, h] = [gl.canvas.width, gl.canvas.height];
-
-    const mv = mat4.perspective(mat4.create(), degrees2radians(90), w / h, 0.0001, 100);
-
-    // for debugging
-    // const mv = mat4.ortho(mat4.create(), -2, 2, -2, 2, 10, -10);
-
-    gl.uniformMatrix4fv(gl.program.uProjectionMatrix, false, mv);
-}
-
-/**
- * When up or down arrows are pressed, change the radius of the circle.
- */
-function onKeyDown(e) {
-    e.preventDefault()
-
-    const transform = mat4.create();
-
-    /**
-     * up/down arrow    - translate z-axis
-     * 
-     * left/right arrow - rotate around the y-axis
-     * W/S key          - rotate around the x-axis
-     * A/D key          - rotate around z-axis
-     */
-    if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key ==="ArrowLeft" || e.key ==="ArrowRight") {
-        // Get the current camera position 
-
-        // moves forward/backward based on the direction it is facing
-        if (e.key === "ArrowUp") {
-            mat4.fromTranslation(transform, [0, 0, -1]);
-            console.log("key up pressed")
-        } else if (e.key === "ArrowDown") {
-            mat4.fromTranslation(transform, [0, 0, 1]);
-            console.log("key down pressed")
-        } else if (e.key ==="ArrowLeft") { // rotate on x axis (Yaw)
-            mat4.rotateY(transform, degrees2radians(1));
-            console.log("key left pressed")
-        } else { // e.key === "Arrow Right"
-            mat4.rotateY(transform, degrees2radians(-1));
-            console.log("key right pressed")
-        }
-    }
-
-    if (e.key === "a" || e.key === "d" || e.key === "w" || e.key === "s") {
-        
-        // Pitch Rotate on Y axis
-        if (e.key === "w") {               // W
-            console.log("key W pressed")
-        } else if (e.key === "s") {        // S
-            console.log("key S pressed")
-        } else if (e.key ==="a") {         // A
-            console.log("key A pressed")
-        } else { // e.key === "68"          // D
-            console.log("key D pressed")
-        }
-    }
-
-    const cur = gl.world.camera.transform;
-    mat4.multiply(cur, cur, transform);
 }
 
 /**
