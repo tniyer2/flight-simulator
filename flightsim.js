@@ -2,7 +2,6 @@
 // Authors: Bryan Cohen & Tanishq Iyer
 'use strict';
 
-// Allow use of glMatrix values directly instead of needing the glMatrix prefix
 const vec3 = glMatrix.vec3;
 // const vec4 = glMatrix.vec4;
 const mat4 = glMatrix.mat4;
@@ -29,14 +28,7 @@ window.addEventListener('load', function init() {
     gl.program = initProgram();
     initBuffers();
 
-    gl.inputState = {
-        state: {},
-        reset: () => { gl.inputState.state = {}; },
-        isKeyDown: key => key in gl.inputState.state && gl.inputState.state[key],
-    };
     initEvents();
-
-    // Set initial values of uniforms
     onWindowResize();
 
     // Start the Game Loop
@@ -55,6 +47,7 @@ function initProgram() {
 
         uniform vec4 uLight; // Light position
         uniform float uLightIntensity;
+
         uniform mat4 uModelMatrix;
         uniform mat4 uCameraMatrix;
         uniform mat4 uProjectionMatrix;
@@ -66,7 +59,6 @@ function initProgram() {
         out vec3 vNormalVector;
         out vec3 vLightVector;
         out vec3 vEyeVector;
-
         out float vLightIntensity;
 
         flat out vec3 vColor;
@@ -134,7 +126,7 @@ function initProgram() {
             }
 
             float d = length(vLightVector);
-            float attenuation = 1.0 / (lightConstantA * d*d + lightConstantB * d + lightConstantC);
+            float attenuation = 1.0 / ((lightConstantA * d * d) + (lightConstantB * d) + lightConstantC);
 
             // compute lighting
             float A = materialAmbient;
@@ -157,9 +149,9 @@ function initProgram() {
     program.aColor = gl.getAttribLocation(program, 'aColor');
 
     // Get the uniform indices
+    program.uCameraMatrix = gl.getUniformLocation(program, 'uCameraMatrix');
     program.uModelMatrix = gl.getUniformLocation(program, 'uModelMatrix');
     program.uProjectionMatrix = gl.getUniformLocation(program, 'uProjectionMatrix');
-    program.uCameraMatrix = gl.getUniformLocation(program, 'uCameraMatrix');
     program.uLight = gl.getUniformLocation(program, 'uLight');
     program.uLightIntensity = gl.getUniformLocation(program, 'uLightIntensity');
 
@@ -167,19 +159,19 @@ function initProgram() {
 }
 
 /**
- * Initialize the data buffers.
+ * Initialize the camera and the data buffers.
+ * Also initialize the octree.
  */
 function initBuffers() {
-    gl.world = createObject("world");
+    gl.world = createSceneTreeNode("world");
 
     // Create the camera
-    let camera = createObject("camera");
+    const camera = createSceneTreeNode("camera");
     {
         const translation = mat4.fromTranslation(mat4.create(), [0, 0, -1]);
         
         const t = camera.localTransform;
         mat4.multiply(t, t, translation);
-        //  mat4.multiply(t, t, angleAxisToMat4(0, [0, 1, 0]));
     }
 
     // Load drone model into GPU
@@ -215,9 +207,9 @@ function initBuffers() {
             0, 3, 7, 3, 4, 7,
         ];
 
-        gl.drone = createObject("model");
+        gl.drone = createSceneTreeNode("model");
         gl.drone.model = loadModel(cube_coords, cube_colors, cube_indices);
-
+        
         // compute drone's transform
         const t = gl.drone.localTransform;
         scaleByConstant(t, 0.2);
@@ -225,7 +217,7 @@ function initBuffers() {
 
     // Generate and load terrain into GPU
     {
-        gl.terrain = createObject("model");
+        gl.terrain = createSceneTreeNode("model");
 
         const seed = 782378;
         const terrain = generate_terrain(7, 0.01, Math.seedrandom(seed));
@@ -235,17 +227,23 @@ function initBuffers() {
         // compute terrain's transform
         const t = gl.terrain.localTransform;
         mat4.multiply(t, t, mat4.fromScaling(mat4.create(), [20, 10, 20]));
+
+        // flip terrain upside-down (inverted by default)
         mat4.multiply(t, t, angleAxisToMat4(180, [0, 0, 1]));
     }
 
+    gl.world.addChild(gl.terrain);
+    gl.world.addChild(gl.drone);
+    gl.drone.addChild(camera);
     gl.world.camera = camera;
 
-    gl.drone.addChild(camera);
-    gl.world.addChild(gl.drone);
-    gl.world.addChild(gl.terrain);
+    gl.octree = createQuadTree([0, 0, 0], 200, 15);
 }
 
-function createObject(type) {
+/**
+ * Creates a default scene tree node.
+ */
+function createSceneTreeNode(type) {
     let obj = {
         type: type,
         localTransform: mat4.identity(mat4.create()),
@@ -254,16 +252,21 @@ function createObject(type) {
     };
 
     obj.addChild = function addChild(child) {
-        child.parent = obj;
-        obj.children.push(child);
+        child.parent = this;
+        this.children.push(child);
     }
 
     Object.defineProperty(obj, "transform", {
-        get: () => {
-            if (obj.parent === null) {
-                return obj.localTransform;
+        get: function () {
+            if (this.parent === null) {
+                return this.localTransform;
             } else {
-                return mat4.multiply(mat4.create(), obj.parent.transform, obj.localTransform);
+                const t = mat4.multiply(
+                    mat4.create(),
+                    this.parent.transform,
+                    this.localTransform
+                );
+                return t;
             }
         }
     });
@@ -275,18 +278,25 @@ function createObject(type) {
  * Initialize event handlers
  */
 function initEvents() {
+    // stores which keys are pressed
+    gl.input = {
+        state: {},
+        reset: function () { this.state = {}; },
+        isKeyDown: function (key) {
+            return this.state[key] === true;
+        }
+    };
+
     window.addEventListener('resize', onWindowResize);
 
     window.addEventListener('keydown', function (e) {
-        e.preventDefault()
-
-        gl.inputState.state[e.key] = true;
+        e.preventDefault();
+        gl.input.state[e.key] = true;
     });
 
     window.addEventListener('keyup', function (e) {
-        e.preventDefault()
-
-        gl.inputState.state[e.key] = false;
+        e.preventDefault();
+        gl.input.state[e.key] = false;
     });
 }
 
@@ -312,11 +322,14 @@ function updateProjectionMatrix() {
     const mv = mat4.perspective(mat4.create(), degreesToRadians(90), w / h, 0.0001, 1000);
 
     // for debugging
-    // const mv = mat4.ortho(mat4.create(), -2, 2, -2, 2, 10, -10);
+    // const mv = mat4.ortho(mat4.create(), -2, 2, -2, 2, 1000, -1000);
 
     gl.uniformMatrix4fv(gl.program.uProjectionMatrix, false, mv);
 }
 
+/**
+ * Runs all tasks for a single frame.
+ */
 function runFrame() {
     updateDroneTransform();
 
@@ -335,7 +348,7 @@ function render() {
 
     // Calculate directional light for day/night cycle
     {
-        const dayNightPeriodInSecs = 30;
+        const dayNightPeriodInSecs = 30; // TODO: change 30 to longer later
         const dayNightRatio = ((ms / 1000) % dayNightPeriodInSecs) / dayNightPeriodInSecs;
         let angle = dayNightRatio * 360;
 
@@ -350,10 +363,10 @@ function render() {
             intensity = baseIntensity;
         }
         
-        const negativeZ = [0, 0, 1];
-        vec3.transformMat4(negativeZ, negativeZ, angleAxisToMat4(angle, [1, 0, 0]));
+        const dir = [0, 0, 1]; // TODO: 1 or -1
+        vec3.transformMat4(dir, dir, angleAxisToMat4(angle, [1, 0, 0]));
         
-        gl.uniform4fv(gl.program.uLight, [...negativeZ, 0]);
+        gl.uniform4fv(gl.program.uLight, [...dir, 0]);
         gl.uniform1f(gl.program.uLightIntensity, intensity);
     }
     
@@ -363,8 +376,9 @@ function render() {
         if (obj.type === "model") {
             gl.uniformMatrix4fv(gl.program.uModelMatrix, false, obj.transform);
 
-            gl.bindVertexArray(obj.model.vao);
-            gl.drawElements(obj.model.mode, obj.model.count, gl.UNSIGNED_SHORT, 0);
+            const model = obj.model;
+            gl.bindVertexArray(model.vao);
+            gl.drawElements(model.mode, model.count, gl.UNSIGNED_SHORT, 0);
         }
 
         for (const child of obj.children) {
@@ -374,38 +388,39 @@ function render() {
 
     draw(gl.world);
 
+    // Cleanup
     gl.bindVertexArray(null);
 }
 
 function updateDroneTransform() {
-    const local = gl.drone.localTransform;
+    const updated = mat4.identity(mat4.create());
 
     // !== for booleans does exclusive or
 
     // moves forward and backward
-    if (gl.inputState.isKeyDown("ArrowUp") !== gl.inputState.isKeyDown("ArrowDown")) {
-        const factor = gl.inputState.isKeyDown("ArrowUp") ? -1 : 1;
+    if (gl.input.isKeyDown("ArrowUp") !== gl.input.isKeyDown("ArrowDown")) {
+        const factor = gl.input.isKeyDown("ArrowUp") ? -1 : 1;
         const t = mat4.fromTranslation(mat4.create(), [0, 0, 0.2 * factor]);
-        mat4.multiply(local, local, t);
+        mat4.multiply(updated, updated, t);
     }
 
     const rotations = [];
 
     // yaw (rotate y-axis)
-    if (gl.inputState.isKeyDown("ArrowLeft") !== gl.inputState.isKeyDown("ArrowRight")) {
-        const factor = gl.inputState.isKeyDown("ArrowRight") ? 1 : -1;
+    if (gl.input.isKeyDown("ArrowLeft") !== gl.input.isKeyDown("ArrowRight")) {
+        const factor = gl.input.isKeyDown("ArrowRight") ? 1 : -1;
         rotations.push(angleAxisToQuat(1 * factor, [0, 1, 0]));
     }
 
     // pitch (rotate x-axis)
-    if (gl.inputState.isKeyDown("w") !== gl.inputState.isKeyDown("s")) {
-        const factor = gl.inputState.isKeyDown("s") ? 1 : -1;
+    if (gl.input.isKeyDown("w") !== gl.input.isKeyDown("s")) {
+        const factor = gl.input.isKeyDown("s") ? 1 : -1;
         rotations.push(angleAxisToQuat(1 * factor, [1, 0, 0]));
     }
 
     // roll (rotate z-axis)
-    if (gl.inputState.isKeyDown("a") !== gl.inputState.isKeyDown("d")) {
-        const factor = gl.inputState.isKeyDown("d") ? 1 : -1;
+    if (gl.input.isKeyDown("a") !== gl.input.isKeyDown("d")) {
+        const factor = gl.input.isKeyDown("d") ? 1 : -1;
         rotations.push(angleAxisToQuat(1 * factor, [0, 0, 1]));
     }
 
@@ -413,7 +428,12 @@ function updateDroneTransform() {
         quat.identity(quat.create()));
     finalRotation = mat4.fromQuat(mat4.create(), finalRotation);
 
-    mat4.multiply(local, local, finalRotation);
+    mat4.multiply(updated, updated, finalRotation);
+
+    if (!gl.quadtree.checkCollision(gl.drone.model, updated)) {
+        const t = gl.drone.localTransform;
+        mat4.multiply(t, t, updated);
+    }
 }
 
 /**
@@ -452,11 +472,10 @@ function loadModel(coords, colors, indices, useStrips) {
 
     const count = indices.length;
     const mode = useStrips ? gl.TRIANGLE_STRIP : gl.TRIANGLES;
-    const transform = mat4.identity(mat4.create());
 
-    const object = { vao, count, mode, transform, children: [] };
+    const object = { vao, count, mode, coords };
 
-    return object
+    return object;
 }
 
 /**
@@ -481,7 +500,7 @@ function loadArrayBuffer(values, location, numComponents, componentType) {
 /**
  * converts from angle-axis to quaternion.
  * angle: angle in degrees.
- * axis: an array of 3 values.
+ * axis: a vec3 representing a direction.
  */
 function angleAxisToQuat(angle, axis) {
     angle = degreesToRadians(angle);
@@ -522,34 +541,65 @@ function scaleByConstant(matrix, value) {
     mat4.multiply(matrix, matrix, scaling);
 }
 
-// create a Octree 
-function collision_detection() {
-    const octree = {plane: null, frontNode: null, backNode: null};
+/**
+ * Create a quad tree.
+ */
+function createQuadTree(origin, length, maxDepth) {
+    const createNode = () => ({axis: null, frontNode: null, backNode: null});
+    
+    const octree = createNode();
+    // axis we want to start with
+    octree.axis = "x";
+
+    const bounds = {
+        x:0,
+        y:0,
+        width: gl.canvas.width,
+        height: gl.canvas.height
+    }
 
     octree.add = function add(triangle) {
-        if (this.frontNode === null) {
+        if (this.plane === null) {
+            this.frontNode = createNode();
+            this.origin = createNode();
             /* initialize front and back nodes */
         }
 
-        const inFrontOfPlane = true; // implement
-        const inBackOfPlane = true; // implement
-        const intersectsPlane = true; // implement
+        const inFrontOfPlane = null;
+        const inBackOfPlane = null;
+        const intersectsPlane = null;
         if (inFrontOfPlane || intersectsPlane) {
             this.frontNode.add(triangle);
         }
         if (inBackOfPlane || intersectsPlane) {
             this.backNode.add(triangle);
         }
+    };
+
+    octree.checkCollision = function (model, updatedTransform) {
+        // creates bounding box around the drone??? + make the box follow the drone
+        const drone_box = {
+            minX: 1,
+            minY: 1,
+            minZ: 1,
+            maxX: -1,
+            maxY: -1,
+            maxZ: -1,
+        }
+    };
+
+    // In
+    {
+        // add the triangles to the octree
+        for (let i = 0; i < model.coords.length; i += 9) {
+            const a = model.coords.subarray(i, i+3);
+            const b = model.coords.subarray(i+3, i+6);
+            const c = model.coords.subarray(i+6, i+9);
+            const triangle = [a, b, c];
+            octree.add(triangle);
+        }
     }
-
-    // add the triangles to the octree
-    for (const triangle of []) {
-        octree.add();
-    } // adds a vector(triangle) the the octree
-
-    octree.findNearestPoint(); // takes a vector as param, and find nearest points of a vector
-}``
-
+}
 
 /**
  * Calculates the normals for the vertices given an array of vertices and array of indices to look
