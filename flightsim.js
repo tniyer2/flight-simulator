@@ -1,4 +1,5 @@
-// Two shapes orbiting
+// Flight Simulator
+// Authors: Bryan Cohen & Tanishq Iyer
 'use strict';
 
 // Allow use of glMatrix values directly instead of needing the glMatrix prefix
