@@ -22,19 +22,24 @@ window.addEventListener('load', function init() {
     // Configure WebGL
     gl.clearColor(0.1, 0.8, 1.0, 1.0);
     gl.enable(gl.DEPTH_TEST);
-    gl.enable(gl.CULL_FACE);
+    // gl.enable(gl.CULL_FACE);
     
     // Initialize the WebGL program and data
     gl.program = initProgram();
     initBuffers();
-    initTransforms();
+
+    gl.inputState = {
+        state: {},
+        reset: () => { gl.inputState.state = {}; },
+        isKeyDown: key => key in gl.inputState.state && gl.inputState.state[key],
+    };
     initEvents();
 
     // Set initial values of uniforms
     onWindowResize();
 
-    // Render the scene
-    render();
+    // Start the Game Loop
+    runFrame();
 });
 
 /**
@@ -159,18 +164,17 @@ function initProgram() {
  * Initialize the data buffers.
  */
 function initBuffers() {
-    gl.world = createDefaultWorld();
+    gl.world = createObject("world");
 
     // Create the camera
-    let camera = mat4.create();
+    let camera = createObject("camera");
     {
-        const translation = mat4.fromTranslation(mat4.create(), [0, 0.5, 10]);
-        const rotation = angleAxisToMat4(-10, [1, 0, 0]);
-
-        mat4.multiply(camera, camera, translation);
-        mat4.multiply(camera, camera, rotation);
+        const translation = mat4.fromTranslation(mat4.create(), [0, 0, -1]);
+        
+        const t = camera.localTransform;
+        mat4.multiply(t, t, translation);
+        //  mat4.multiply(t, t, angleAxisToMat4(0, [0, 1, 0]));
     }
-    gl.world.camera = {transform: camera};
 
     // Load drone model into GPU
     {
@@ -205,31 +209,60 @@ function initBuffers() {
             0, 3, 7, 3, 4, 7,
         ];
 
-        gl.drone = loadModel(cube_coords, cube_colors, cube_indices);
+        gl.drone = createObject("model");
+        gl.drone.model = loadModel(cube_coords, cube_colors, cube_indices);
+
+        // compute drone's transform
+        const t = gl.drone.localTransform;
+        scaleByConstant(t, 0.2);
     }
 
     // Generate and load terrain into GPU
     {
+        gl.terrain = createObject("model");
+
         const seed = 782378;
         const terrain = generate_terrain(7, 0.01, Math.seedrandom(seed));
         let [terrainVertices, terrainIndices] = generate_mesh(terrain);
-        gl.terrain = loadModel(terrainVertices, null, terrainIndices, true);
-    }
-}
+        gl.terrain.model = loadModel(terrainVertices, null, terrainIndices, true);
 
-function initTransforms() {
-    // compute drone's transform
-    {
-        const t = gl.drone.transform;
-        scaleByConstant(t, 1);
-    }
-
-    // compute terrain's transform
-    {
-        const t = gl.terrain.transform;
+        // compute terrain's transform
+        const t = gl.terrain.localTransform;
         mat4.multiply(t, t, mat4.fromScaling(mat4.create(), [20, 10, 20]));
         mat4.multiply(t, t, angleAxisToMat4(180, [0, 0, 1]));
     }
+
+    gl.world.camera = camera;
+
+    gl.drone.addChild(camera);
+    gl.world.addChild(gl.drone);
+    gl.world.addChild(gl.terrain);
+}
+
+function createObject(type) {
+    let obj = {
+        type: type,
+        localTransform: mat4.identity(mat4.create()),
+        parent: null,
+        children: []
+    };
+
+    obj.addChild = function addChild(child) {
+        child.parent = obj;
+        obj.children.push(child);
+    }
+
+    Object.defineProperty(obj, "transform", {
+        get: () => {
+            if (obj.parent === null) {
+                return obj.localTransform;
+            } else {
+                return mat4.multiply(mat4.create(), obj.parent.transform, obj.localTransform);
+            }
+        }
+    });
+
+    return obj;
 }
 
 /**
@@ -237,7 +270,18 @@ function initTransforms() {
  */
 function initEvents() {
     window.addEventListener('resize', onWindowResize);
-    window.addEventListener('keydown', onKeyDown);
+
+    window.addEventListener('keydown', function (e) {
+        e.preventDefault()
+
+        gl.inputState.state[e.key] = true;
+    });
+
+    window.addEventListener('keyup', function (e) {
+        e.preventDefault()
+
+        gl.inputState.state[e.key] = false;
+    });
 }
 
 /**
@@ -259,7 +303,7 @@ function onWindowResize() {
 function updateProjectionMatrix() {
     let [w, h] = [gl.canvas.width, gl.canvas.height];
 
-    const mv = mat4.perspective(mat4.create(), degrees2radians(90), w / h, 0.0001, 100);
+    const mv = mat4.perspective(mat4.create(), degrees2radians(90), w / h, 0.0001, 1000);
 
     // for debugging
     // const mv = mat4.ortho(mat4.create(), -2, 2, -2, 2, 10, -10);
@@ -267,96 +311,78 @@ function updateProjectionMatrix() {
     gl.uniformMatrix4fv(gl.program.uProjectionMatrix, false, mv);
 }
 
-/**
- * When up or down arrows are pressed, change the radius of the circle.
- */
-function onKeyDown(e) {
-    e.preventDefault()
+function runFrame() {
+    updateDroneTransform();
 
-    const transform = mat4.create();
+    render();
 
-    /**
-     * up/down arrow    - translate z-axis
-     * 
-     * left/right arrow - rotate around the y-axis
-     * W/S key          - rotate around the x-axis
-     * A/D key          - rotate around z-axis
-     */
-    if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key ==="ArrowLeft" || e.key ==="ArrowRight") {
-        // Get the current camera position 
-
-        // moves forward/backward based on the direction it is facing
-        if (e.key === "ArrowUp") {
-            mat4.fromTranslation(transform, [0, 0, -1]);
-            console.log("key up pressed")
-        } else if (e.key === "ArrowDown") {
-            mat4.fromTranslation(transform, [0, 0, 1]);
-            console.log("key down pressed")
-        } else if (e.key ==="ArrowLeft") { // rotate on x axis (Yaw)
-            mat4.rotateY(transform, degrees2radians(1));
-            console.log("key left pressed")
-        } else { // e.key === "Arrow Right"
-            mat4.rotateY(transform, degrees2radians(-1));
-            console.log("key right pressed")
-        }
-    }
-
-    if (e.key === "a" || e.key === "d" || e.key === "w" || e.key === "s") {
-        
-        // Pitch Rotate on Y axis
-        if (e.key === "w") {               // W
-            console.log("key W pressed")
-        } else if (e.key === "s") {        // S
-            console.log("key S pressed")
-        } else if (e.key ==="a") {         // A
-            console.log("key A pressed")
-        } else { // e.key === "68"          // D
-            console.log("key D pressed")
-        }
-    }
-
-    const cur = gl.world.camera.transform;
-    mat4.multiply(cur, cur, transform);
+    window.requestAnimationFrame(runFrame);
 }
 
 /**
  * Render the scene.
  */
-function render(ms) {
+function render() {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
-    // The ms value is the number of miliseconds since some arbitrary time in the past
-    // If it is not provided (i.e. render is directly called) then this if statement will grab the current time
-    if (!ms) { ms = performance.now(); }
 
     gl.uniformMatrix4fv(gl.program.uCameraMatrix, false, gl.world.camera.transform);
     gl.uniform4fv(gl.program.uLight, [-1, -1, -1, 0]);
 
-    // For each orbiting object, draw the object
-    {
-        const draw = function (model) {
-            gl.uniformMatrix4fv(gl.program.uModelMatrix, false, model.transform);
+    const draw = function (obj) {
+        if (obj.type === "model") {
+            gl.uniformMatrix4fv(gl.program.uModelMatrix, false, obj.transform);
 
-            gl.bindVertexArray(model.vao);
-            gl.drawElements(model.mode, model.count, gl.UNSIGNED_SHORT, 0);
+            gl.bindVertexArray(obj.model.vao);
+            gl.drawElements(obj.model.mode, obj.model.count, gl.UNSIGNED_SHORT, 0);
         }
 
-        draw(gl.drone);
-        draw(gl.terrain);
-
-        gl.bindVertexArray(null);
+        for (const child of obj.children) {
+            draw(child);
+        }
     }
 
-    window.requestAnimationFrame(render);
+    draw(gl.world);
+
+    gl.bindVertexArray(null);
 }
 
-function createDefaultWorld() {
-    return {
-        type: "world", 
-        transform: mat4.identity(mat4.create()), 
-        children: [],
-        camera: null
-    };
+function updateDroneTransform() {
+    const local = gl.drone.localTransform;
+
+    // !== for booleans does exclusive or
+
+    // moves forward and backward
+    if (gl.inputState.isKeyDown("ArrowUp") !== gl.inputState.isKeyDown("ArrowDown")) {
+        const factor = gl.inputState.isKeyDown("ArrowUp") ? -1 : 1;
+        const t = mat4.fromTranslation(mat4.create(), [0, 0, 0.2 * factor]);
+        mat4.multiply(local, local, t);
+    }
+
+    const rotations = [];
+
+    // yaw (rotate y-axis)
+    if (gl.inputState.isKeyDown("ArrowLeft") !== gl.inputState.isKeyDown("ArrowRight")) {
+        const factor = gl.inputState.isKeyDown("ArrowRight") ? 1 : -1;
+        rotations.push(angleAxisToQuat(1 * factor, [0, 1, 0]));
+    }
+
+    // pitch (rotate x-axis)
+    if (gl.inputState.isKeyDown("w") !== gl.inputState.isKeyDown("s")) {
+        const factor = gl.inputState.isKeyDown("s") ? 1 : -1;
+        rotations.push(angleAxisToQuat(1 * factor, [1, 0, 0]));
+    }
+
+    // roll (rotate z-axis)
+    if (gl.inputState.isKeyDown("a") !== gl.inputState.isKeyDown("d")) {
+        const factor = gl.inputState.isKeyDown("d") ? 1 : -1;
+        rotations.push(angleAxisToQuat(1 * factor, [0, 0, 1]));
+    }
+
+    let finalRotation = rotations.reduce((a, b) => quat.multiply(a, a, b),
+        quat.identity(quat.create()));
+    finalRotation = mat4.fromQuat(mat4.create(), finalRotation);
+
+    mat4.multiply(local, local, finalRotation);
 }
 
 /**
