@@ -308,7 +308,7 @@ function onWindowResize() {
 function updateProjectionMatrix() {
     let [w, h] = [gl.canvas.width, gl.canvas.height];
 
-    const mv = mat4.perspective(mat4.create(), degrees2radians(90), w / h, 0.0001, 1000);
+    const mv = mat4.perspective(mat4.create(), degreesToRadians(90), w / h, 0.0001, 1000);
 
     // for debugging
     // const mv = mat4.ortho(mat4.create(), -2, 2, -2, 2, 10, -10);
@@ -334,15 +334,18 @@ function render() {
 
     gl.uniformMatrix4fv(gl.program.uCameraMatrix, false, gl.world.camera.transform);
 
-    const angle = (90 + ((ms) / 24)) % 360;
+    const angle = (((ms) / 24)) % 360;
     if (angle < 180) {
         const negativeZ = [0, 0, 1];
         vec3.transformMat4(negativeZ, negativeZ, angleAxisToMat4(angle, [1, 0, 0]));
 
         gl.uniform4fv(gl.program.uLight, [...negativeZ, 0]);
-        gl.uniform1f(gl.program.uLightIntensity, 4);
+        gl.uniform1f(gl.program.uLightIntensity, 1 + Math.sin(degreesToRadians(angle)));
     } else {
-        gl.uniform4fv(gl.program.uLight, [0, -1, 0, 0]);
+        const negativeZ = [0, 0, 1];
+        vec3.transformMat4(negativeZ, negativeZ, angleAxisToMat4(180, [1, 0, 0]));
+
+        gl.uniform4fv(gl.program.uLight, [...negativeZ, 0]);
         gl.uniform1f(gl.program.uLightIntensity, 1);
     }
 
@@ -472,7 +475,7 @@ function loadArrayBuffer(values, location, numComponents, componentType) {
  * axis: an array of 3 values.
  */
 function angleAxisToQuat(angle, axis) {
-    angle = degrees2radians(angle);
+    angle = degreesToRadians(angle);
     
     axis = vec3.normalize(vec3.create(), axis);
 
@@ -496,7 +499,7 @@ function angleAxisToMat4(angle, axis) {
 }
 
 // Converts an angle in degrees to radians.
-function degrees2radians(angle) {
+function degreesToRadians(angle) {
     return (angle / 360) * (2 * Math.PI);
 }
 
@@ -509,6 +512,35 @@ function scaleByConstant(matrix, value) {
 
     mat4.multiply(matrix, matrix, scaling);
 }
+
+// create a Octree 
+function collision_detection() {
+    const octree = {plane: null, frontNode: null, backNode: null};
+
+    octree.add = function add(triangle) {
+        if (this.frontNode === null) {
+            /* initialize front and back nodes */
+        }
+
+        const inFrontOfPlane = true; // implement
+        const inBackOfPlane = true; // implement
+        const intersectsPlane = true; // implement
+        if (inFrontOfPlane || intersectsPlane) {
+            this.frontNode.add(triangle);
+        }
+        if (inBackOfPlane || intersectsPlane) {
+            this.backNode.add(triangle);
+        }
+    }
+
+    // add the triangles to the octree
+    for (const triangle of []) {
+        octree.add();
+    } // adds a vector(triangle) the the octree
+
+    octree.findNearestPoint(); // takes a vector as param, and find nearest points of a vector
+}
+
 
 /**
  * Calculates the normals for the vertices given an array of vertices and array of indices to look
