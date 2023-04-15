@@ -237,7 +237,7 @@ function initBuffers() {
     gl.drone.addChild(camera);
     gl.world.camera = camera;
 
-    gl.quadtree = createQuadTree(gl.terrain.model, gl.terrain.transform, [0, 0, 0], 200, 40);
+    gl.quadtree = createQuadTree(gl.terrain.model, gl.terrain.transform, [0, 0, 0], 200, 1);
 }
 
 /**
@@ -441,7 +441,7 @@ function updateDroneTransform() {
                         terrainAABB.min[0] > droneAABB.min[0] ||
                         terrainAABB.min[2] > droneAABB.min[2];
 
-    if (!collision && !outOfBounds) {
+    if (!collision) {
         // if no collisions, then move the drone
         const t = gl.drone.localTransform;
         mat4.multiply(t, t, updated);
