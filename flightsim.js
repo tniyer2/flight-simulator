@@ -2,7 +2,7 @@
 // Authors: Bryan Cohen & Tanishq Iyer
 'use strict';
 
-const vec3 = glMatrix.vec3;
+// const vec3 = glMatrix.vec3;
 // const vec4 = glMatrix.vec4;
 const mat4 = glMatrix.mat4;
 const quat = glMatrix.quat;
@@ -429,10 +429,10 @@ function updateDroneTransform() {
     finalRotation = mat4.fromQuat(mat4.create(), finalRotation);
 
     mat4.multiply(updated, updated, finalRotation);
+    mat4.multiply(updated, gl.drone.localTransform, updated);
 
     if (!gl.quadtree.checkCollision(gl.drone.model, updated)) {
-        const t = gl.drone.localTransform;
-        mat4.multiply(t, t, updated);
+        gl.drone.localTransform = updated;
     }
 }
 
@@ -553,9 +553,6 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
         throw new Error("Invalid argument.");
     }
 
-    // for efficiency
-    const VEC3_TEMP = vec3.create();
-
     // if isXAxis is false it implies the node splits on the z-axis.
     const createNode = (isXAxis, origin, length, depth) => {
         const node = {
@@ -610,8 +607,8 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
             }
         };
 
-        // returns if a triangle should go in the front node
-        // and if it should go in the back node.
+        // returns whether a triangle should go in the front node
+        // and whether it should go in the back node.
         node._isTriangleInFrontOrBack = function (triangle) {
             const axis = this.isXAxis ? 2 : 0;
 
@@ -619,7 +616,7 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
             let isBack = false;
 
             for (let point of triangle) {
-                vec3.transformMat4(VEC3_TEMP, point, modelTransform);
+                point = vec3.transformMat4(vec3.create(), point, modelTransform);
 
                 if (point[axis] >= this.origin[axis]) {
                     isFront = true;
@@ -632,7 +629,60 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
         };
 
         node.checkCollision = function (otherModel, otherTransform) {
+            if (this.depth === maxDepth) {
+                if (this._doesAnyLeafCollide(otherModel, otherTransform)) {
+                    return true;
+                }
+            }
 
+            const aabb = getAxisAlignedXZBoundingBox(otherModel, otherTransform);
+
+            let [isFront, isBack] = this._isAABBInFrontOrBack(aabb);
+
+            if (isFront && this.front !== null && this.front.checkCollision(otherModel, otherTransform)) {
+                return true;
+            }
+
+            if (isBack && this.back !== null && this.back.checkCollision(otherModel, otherTransform)) {
+                return true;
+            }
+
+            return false;
+        };
+
+        // returns whether a AABB should go in the front node
+        // and whether it should go in the back node.
+        node._isAABBInFrontOrBack = function (aabb) {
+            const axis = this.isXAxis ? 2 : 0;
+
+            let isFront = false;
+            let isBack = false;
+
+            for (let point of [aabb.min, aabb.max]) {
+                if (point[axis] >= this.origin[axis]) {
+                    isFront = true;
+                } else {
+                    isBack = true;
+                }
+            }
+
+            return [isFront, isBack];
+        };
+
+        node._doesAnyLeafCollide = function (otherModel, otherTransform) {
+            for (let i = 0; i < otherModel.coords.length; i += 9) {
+                let a = otherModel.coords.subarray(i, i+3);
+                a = vec3.transformMat4(vec3.create(), a, otherTransform);
+                
+                let b = otherModel.coords.subarray(i, i+3);
+                b = vec3.transformMat4(vec3.create(), b, otherTransform);
+
+                let c = otherModel.coords.subarray(i, i+3);
+                c = vec3.transformMat4(vec3.create(), c, otherTransform);
+
+                
+            }
+            return false;
         };
 
         return node;
@@ -656,52 +706,32 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
     return root;
 }
 
-/**
- * Calculates the normals for the vertices given an array of vertices and array of indices to look
- * up into. The triangles are full triangles and not triangle strips.
- *
- * Arguments:
- *    coords - a Float32Array with 3 values per vertex
- *    indices - a regular or typed array
- *    is_tri_strip - defaults to true which means the indices represent a triangle strip
- * Returns:
- *    Float32Array of the normals with 3 values per vertex
- */
-function calc_normals(coords, indices, is_tri_strip) {
-    if (is_tri_strip !== true && is_tri_strip !== false) { is_tri_strip = true; }
-    
-    // Start with all vertex normals as <0,0,0>
-    let normals = new Float32Array(coords.length);
+function getAxisAlignedXZBoundingBox(model, transform) {
+    let minX = Number.MAX_VALUE;
+    let maxX = Number.MIN_VALUE;
 
-    // Get temporary variables
-    let [N_face, V, U] = [vec3.create(), vec3.create(), vec3.create()];
+    let minZ = Number.MAX_VALUE;
+    let maxZ = Number.MIN_VALUE;
 
-    // Calculate the face normals for each triangle then add them to the vertices
-    let inc = is_tri_strip ? 1 : 3; // triangle strips only go up by 1 index per triangle
-    for (let i = 0; i < indices.length - 2; i += inc) {
-        // Get the indices of the triangle and then get pointers its coords and normals
-        let j = indices[i]*3, k = indices[i+1]*3, l = indices[i+2]*3;
-        let A = coords.subarray(j, j+3), B = coords.subarray(k, k+3), C = coords.subarray(l, l+3);
-        let NA = normals.subarray(j, j+3), NB = normals.subarray(k, k+3), NC = normals.subarray(l, l+3);
+    for (let i = 0; i < model.coords.length; i += 3) {
+        let point = model.coords.subarray(i, i+3);
+        point = vec3.transformMat4(vec3.create(), point, transform);
 
-        // Compute normal for the A, B, C triangle and save to N_face (will need to use V and U as temporaries as well)
-        vec3.cross(N_face, vec3.subtract(V, B, A), vec3.subtract(U, C, A));
-        if (is_tri_strip && (i%2) !== 0) { // every other triangle in a strip is actually reversed
-            vec3.negate(N_face, N_face);
+        if (point[0] < minX) {
+            minX = point[0];
+        }
+        if (point[0] > maxX) {
+            maxX = point[0];
         }
 
-        // Add N_face to the 3 normals of the triangle: NA, NB, and NC
-        vec3.add(NA, N_face, NA); // NA += N_face
-        vec3.add(NB, N_face, NB);
-        vec3.add(NC, N_face, NC);
+        if (point[2] < minZ) {
+            minZ = point[2];
+        }
+        if (point[2] > maxZ) {
+            maxZ = point[2];
+        }
     }
 
-    // Normalize the normals
-    for (let i = 0; i < normals.length; i+=3) {
-        let N = normals.subarray(i, i+3);
-        vec3.normalize(N, N);
-    }
-
-    // Return the computed normals
-    return normals;
+    return { min: [minX, minZ],  max: [maxX, maxZ] };
 }
+
