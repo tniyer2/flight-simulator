@@ -237,7 +237,7 @@ function initBuffers() {
     gl.drone.addChild(camera);
     gl.world.camera = camera;
 
-    gl.quadtree = createQuadTree(gl.terrain.model, gl.terrain.transform, [0, 0], 200, 1);
+    gl.quadtree = createQuadTree(gl.terrain.model, gl.terrain.transform, [0, 0, 0], 200, 1);
 }
 
 /**
@@ -431,7 +431,13 @@ function updateDroneTransform() {
     mat4.multiply(updated, updated, finalRotation);
     mat4.multiply(updated, gl.drone.localTransform, updated);
 
-    if (!gl.quadtree.checkCollision(gl.drone.model, updated)) {
+    const collision = gl.quadtree.checkCollision(gl.drone.model, updated);
+
+    if (collision) {
+        console.log("collision");
+    }
+
+    if (!collision) {
         gl.drone.localTransform = updated;
     }
 }
@@ -541,6 +547,8 @@ function scaleByConstant(matrix, value) {
     mat4.multiply(matrix, matrix, scaling);
 }
 
+let COUNT = 0;
+
 /**
  * Create a quad tree.
  * model    - loaded model from createModel().
@@ -555,6 +563,8 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
 
     // if isXAxis is false it implies the node splits on the z-axis.
     const createNode = (isXAxis, origin, length, depth) => {
+        console.log(origin);
+
         const node = {
             isXAxis, origin, length, depth, front: null, back: null
         };
@@ -595,7 +605,7 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
             const newLength = this.length / 2;
 
             const delta = factor * (newLength / 2);
-            const deltaVec = this.isXAxis ? [0, delta] : [delta, 0];
+            const deltaVec = this.isXAxis ? [0, 0, delta] : [delta, 0, 0];
             const newOrigin = vec3.add(vec3.create(), this.origin, deltaVec);
 
             const node = createNode(!this.isXAxis, newOrigin, newLength, this.depth+1);
@@ -616,8 +626,6 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
             let isBack = false;
 
             for (let point of triangle) {
-                point = vec3.transformMat4(vec3.create(), point, modelTransform);
-
                 if (point[axis] >= this.origin[axis]) {
                     isFront = true;
                 } else {
@@ -669,7 +677,7 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
             return [isFront, isBack];
         };
 
-        node._doesAnyLeafCollide = function (otherModel, otherTransform) {
+        node._doesAnyLeafCollide = function (otherModel, otherTransform) {       
             for (let i = 0; i < otherModel.coords.length; i += 9) {
                 let a = otherModel.coords.subarray(i, i+3);
                 a = vec3.transformMat4(vec3.create(), a, otherTransform);
@@ -680,7 +688,24 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
                 let c = otherModel.coords.subarray(i, i+3);
                 c = vec3.transformMat4(vec3.create(), c, otherTransform);
 
-                
+                for (let leaf of this.leafs) {
+                    for (let i = 0; i < 3; i++) {
+                        const p1 = leaf[i];
+                        const p2 = leaf[(i+1)%3];
+                        const v = vec3.subtract(vec3.create(), p2, p1);
+
+                        const intersection = line_seg_triangle_intersection(p1, v, a, b, c);
+
+                        if (COUNT < 100) {
+                            COUNT += 1;
+                            console.log(p1, v, a, b, c);
+                        }
+
+                        if (intersection !== null) {
+                            return true;
+                        }
+                    }
+                }
             }
             return false;
         };
@@ -691,17 +716,21 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
     const root = createNode(true, origin_, length_, 1);
     // add the triangles to the tree
     for (let i = 0; i < model.coords.length; i += 9) {
-        const a = model.coords.subarray(i, i+3);
-        const b = model.coords.subarray(i+3, i+6);
-        const c = model.coords.subarray(i+6, i+9);
+        let a = model.coords.subarray(i, i+3);
+        let b = model.coords.subarray(i+3, i+6);
+        let c = model.coords.subarray(i+6, i+9);
+
+        a = vec3.transformMat4(vec3.create(), a, modelTransform);
+        b = vec3.transformMat4(vec3.create(), b, modelTransform);
+        c = vec3.transformMat4(vec3.create(), c, modelTransform);
 
         const triangle = [a, b, c];
 
         root._add(triangle);
     }
 
-    // console.log("num triangles: ", model.coords.length / 9);
-    // console.log(root);
+    console.log("num triangles: ", model.coords.length / 9);
+    console.log(root);
 
     return root;
 }
@@ -732,6 +761,5 @@ function getAxisAlignedXZBoundingBox(model, transform) {
         }
     }
 
-    return { min: [minX, minZ],  max: [maxX, maxZ] };
+    return { min: [minX, 0, minZ],  max: [maxX, 0, maxZ] };
 }
-

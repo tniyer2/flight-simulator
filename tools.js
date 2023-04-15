@@ -64,7 +64,7 @@ function calc_normals(coords, indices, is_tri_strip) {
         let NA = normals.subarray(j, j+3), NB = normals.subarray(k, k+3), NC = normals.subarray(l, l+3);
 
         // Compute normal for the A, B, C triangle and save to N_face (will need to use V and U as temporaries as well)
-        vec3.cross(N_face, vec3.subtract(V, A, B), vec3.subtract(U, C, A));
+        vec3.cross(N_face, vec3.subtract(V, B, A), vec3.subtract(U, C, A));
         if (is_tri_strip && (i%2) !== 0) { // every other triangle in a strip is actually reversed
             vec3.negate(N_face, N_face);
         }
