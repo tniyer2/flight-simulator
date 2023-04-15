@@ -237,7 +237,7 @@ function initBuffers() {
     gl.drone.addChild(camera);
     gl.world.camera = camera;
 
-    gl.quadtree = createQuadTree(gl.terrain.model, gl.terrain.transform, [0, 0, 0], 200, 1);
+    gl.quadtree = createQuadTree(gl.terrain.model, gl.terrain.transform, [0, 0, 0], 200, 10);
 }
 
 /**
@@ -429,16 +429,17 @@ function updateDroneTransform() {
     finalRotation = mat4.fromQuat(mat4.create(), finalRotation);
 
     mat4.multiply(updated, updated, finalRotation);
-    mat4.multiply(updated, gl.drone.localTransform, updated);
+    const hypothetical = mat4.multiply(mat4.create(), gl.drone.transform, updated);
 
-    const collision = gl.quadtree.checkCollision(gl.drone.model, updated);
+    const collision = gl.quadtree.checkCollision(gl.drone.model, hypothetical);
 
     if (collision) {
         console.log("collision");
     }
 
     if (!collision) {
-        gl.drone.localTransform = updated;
+        const t = gl.drone.localTransform;
+        mat4.multiply(t, t, updated);
     }
 }
 
@@ -682,10 +683,10 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
                 let a = otherModel.coords.subarray(i, i+3);
                 a = vec3.transformMat4(vec3.create(), a, otherTransform);
                 
-                let b = otherModel.coords.subarray(i, i+3);
+                let b = otherModel.coords.subarray(i+3, i+6);
                 b = vec3.transformMat4(vec3.create(), b, otherTransform);
 
-                let c = otherModel.coords.subarray(i, i+3);
+                let c = otherModel.coords.subarray(i+6, i+9);
                 c = vec3.transformMat4(vec3.create(), c, otherTransform);
 
                 for (let leaf of this.leafs) {
@@ -698,10 +699,11 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
 
                         if (COUNT < 100) {
                             COUNT += 1;
-                            console.log(p1, v, a, b, c);
+                            // console.log(p1, v, a, b, c);
                         }
 
-                        if (intersection !== null) {
+                        if (intersection !== null && !Number.isNaN(intersection[0])) {
+                            console.log(intersection);
                             return true;
                         }
                     }
