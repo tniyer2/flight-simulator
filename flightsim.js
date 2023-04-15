@@ -237,7 +237,7 @@ function initBuffers() {
     gl.drone.addChild(camera);
     gl.world.camera = camera;
 
-    gl.quadtree = createQuadTree(gl.terrain.model, gl.terrain.transform, [0, 0], 200, 3);
+    gl.quadtree = createQuadTree(gl.terrain.model, gl.terrain.transform, [0, 0], 200, 1);
 }
 
 /**
@@ -548,7 +548,7 @@ function scaleByConstant(matrix, value) {
  * length_  - the length and width of the tree.
  * maxDepth - the number of nodes before the tree stops splitting.
  */
-function createQuadTree(model, transform, origin_, length_, maxDepth) {
+function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
     if (typeof maxDepth !== 'number' || maxDepth < 1) {
         throw new Error("Invalid argument.");
     }
@@ -591,13 +591,15 @@ function createQuadTree(model, transform, origin_, length_, maxDepth) {
         };
 
         node._initChild = function (isFront) {
+            isFront = isFront === true;
+
             const factor = isFront ? 1 : -1;
 
             const newLength = this.length / 2;
 
-            const delta = factor * newLength / 2;
+            const delta = factor * (newLength / 2);
             const deltaVec = this.isXAxis ? [0, delta] : [delta, 0];
-            const newOrigin = vec3.add(VEC3_TEMP, this.origin, deltaVec);
+            const newOrigin = vec3.add(vec3.create(), this.origin, deltaVec);
 
             const node = createNode(!this.isXAxis, newOrigin, newLength, this.depth+1);
 
@@ -611,13 +613,14 @@ function createQuadTree(model, transform, origin_, length_, maxDepth) {
         // returns if a triangle should go in the front node
         // and if it should go in the back node.
         node._isTriangleInFrontOrBack = function (triangle) {
-            const axis = this.isXAxis ? 0 : 2;
+            const axis = this.isXAxis ? 2 : 0;
 
             let isFront = false;
             let isBack = false;
 
             for (let point of triangle) {
-                vec3.transformMat4(VEC3_TEMP, point, transform);
+                vec3.transformMat4(VEC3_TEMP, point, modelTransform);
+
                 if (point[axis] >= this.origin[axis]) {
                     isFront = true;
                 } else {
@@ -628,13 +631,14 @@ function createQuadTree(model, transform, origin_, length_, maxDepth) {
             return [isFront, isBack];
         };
 
-        node.checkCollision = function (collidingModel, updatedTransform) {
+        node.checkCollision = function (otherModel, otherTransform) {
+
         };
 
         return node;
     };
 
-    const root = createNode(true, origin_, length_, 0);
+    const root = createNode(true, origin_, length_, 1);
     // add the triangles to the tree
     for (let i = 0; i < model.coords.length; i += 9) {
         const a = model.coords.subarray(i, i+3);
@@ -646,7 +650,7 @@ function createQuadTree(model, transform, origin_, length_, maxDepth) {
         root._add(triangle);
     }
 
-    // console.log(model.coords.length);
+    // console.log("num triangles: ", model.coords.length / 9);
     // console.log(root);
 
     return root;
