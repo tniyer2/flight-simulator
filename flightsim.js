@@ -237,7 +237,7 @@ function initBuffers() {
     gl.drone.addChild(camera);
     gl.world.camera = camera;
 
-    gl.octree = createQuadTree([0, 0, 0], 200, 15);
+    gl.quadtree = createQuadTree(gl.terrain.model, gl.terrain.transform, [0, 0], 200, 3);
 }
 
 /**
@@ -543,62 +543,113 @@ function scaleByConstant(matrix, value) {
 
 /**
  * Create a quad tree.
+ * model    - loaded model from createModel().
+ * origin_  - center or starting point of the tree.
+ * length_  - the length and width of the tree.
+ * maxDepth - the number of nodes before the tree stops splitting.
  */
-function createQuadTree(origin, length, maxDepth) {
-    const createNode = () => ({axis: null, frontNode: null, backNode: null});
-    
-    const octree = createNode();
-    // axis we want to start with
-    octree.axis = "x";
-
-    const bounds = {
-        x:0,
-        y:0,
-        width: gl.canvas.width,
-        height: gl.canvas.height
+function createQuadTree(model, transform, origin_, length_, maxDepth) {
+    if (typeof maxDepth !== 'number' || maxDepth < 1) {
+        throw new Error("Invalid argument.");
     }
 
-    octree.add = function add(triangle) {
-        if (this.plane === null) {
-            this.frontNode = createNode();
-            this.origin = createNode();
-            /* initialize front and back nodes */
+    // for efficiency
+    const VEC3_TEMP = vec3.create();
+
+    // if isXAxis is false it implies the node splits on the z-axis.
+    const createNode = (isXAxis, origin, length, depth) => {
+        const node = {
+            isXAxis, origin, length, depth, front: null, back: null
+        };
+
+        if (depth === maxDepth) {
+            node.leafs = [];
         }
 
-        const inFrontOfPlane = null;
-        const inBackOfPlane = null;
-        const intersectsPlane = null;
-        if (inFrontOfPlane || intersectsPlane) {
-            this.frontNode.add(triangle);
-        }
-        if (inBackOfPlane || intersectsPlane) {
-            this.backNode.add(triangle);
-        }
+        // adds a triangle to the tree, possibly creating new nodes.
+        node._add = function (triangle) {
+            if (this.depth === maxDepth) {
+                this.leafs.push(triangle);
+                return;
+            }
+
+            let [inFront, inBack] = this._isTriangleInFrontOrBack(triangle);
+            
+            if (inFront) {
+                if (this.front === null) {
+                    this._initChild(true);
+                }
+                this.front._add(triangle);
+            }
+
+            if (inBack) {
+                if (this.back === null) {
+                    this._initChild(false);
+                }
+                this.back._add(triangle);
+            }
+        };
+
+        node._initChild = function (isFront) {
+            const factor = isFront ? 1 : -1;
+
+            const newLength = this.length / 2;
+
+            const delta = factor * newLength / 2;
+            const deltaVec = this.isXAxis ? [0, delta] : [delta, 0];
+            const newOrigin = vec3.add(VEC3_TEMP, this.origin, deltaVec);
+
+            const node = createNode(!this.isXAxis, newOrigin, newLength, this.depth+1);
+
+            if (isFront) {
+                this.front = node;
+            } else {
+                this.back = node;
+            }
+        };
+
+        // returns if a triangle should go in the front node
+        // and if it should go in the back node.
+        node._isTriangleInFrontOrBack = function (triangle) {
+            const axis = this.isXAxis ? 0 : 2;
+
+            let isFront = false;
+            let isBack = false;
+
+            for (let point of triangle) {
+                vec3.transformMat4(VEC3_TEMP, point, transform);
+                if (point[axis] >= this.origin[axis]) {
+                    isFront = true;
+                } else {
+                    isBack = true;
+                }
+            }
+
+            return [isFront, isBack];
+        };
+
+        node.checkCollision = function (collidingModel, updatedTransform) {
+        };
+
+        return node;
     };
 
-    octree.checkCollision = function (model, updatedTransform) {
-        // creates bounding box around the drone??? + make the box follow the drone
-        const drone_box = {
-            minX: 1,
-            minY: 1,
-            minZ: 1,
-            maxX: -1,
-            maxY: -1,
-            maxZ: -1,
-        }
-    };
+    const root = createNode(true, origin_, length_, 0);
+    // add the triangles to the tree
+    for (let i = 0; i < model.coords.length; i += 9) {
+        const a = model.coords.subarray(i, i+3);
+        const b = model.coords.subarray(i+3, i+6);
+        const c = model.coords.subarray(i+6, i+9);
 
-    // In
-    {
-        // add the triangles to the octree
-        for (let i = 0; i < model.coords.length; i += 9) {
-            const a = model.coords.subarray(i, i+3);
-            const b = model.coords.subarray(i+3, i+6);
-            const c = model.coords.subarray(i+6, i+9);
-            const triangle = [a, b, c];
-            octree.add(triangle);
-        }
+        const triangle = [a, b, c];
+
+        root._add(triangle);
     }
+
+    // console.log(model.coords.length);
+    // console.log(root);
+
+    return root;
 }
 
 /**
