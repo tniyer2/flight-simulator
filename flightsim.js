@@ -582,7 +582,7 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
                 return;
             }
 
-            let [inFront, inBack] = this._isTriangleInFrontOrBack(triangle);
+            let inFront = this._isTriangleInFrontOrBack(triangle)[0];
             
             if (inFront) {
                 if (this.front === null) {
@@ -645,7 +645,7 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
 
             const aabb = getAxisAlignedXZBoundingBox(otherModel, otherTransform);
 
-            let [isFront, isBack] = this._isAABBInFrontOrBack(aabb);
+            let isFront = this._isAABBInFrontOrBack(aabb)[0];
 
             if (isFront) {
                 if (this.front !== null && this.front.checkCollision(otherModel, otherTransform)) {
