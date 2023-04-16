@@ -238,7 +238,7 @@ function initBuffers() {
         gl.terrain.model,
         gl.terrain.transform,
         [0, 0, 0],
-        [20, 20],
+        [40, 40],
         8
     );
 
