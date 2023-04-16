@@ -362,7 +362,7 @@ function render() {
 
     // Calculate directional light for day/night cycle
     {
-        const dayNightPeriodInSecs = 120;
+        const dayNightPeriodInSecs = 300;
         const dayNightRatio = ((ms / 1000) % dayNightPeriodInSecs) / dayNightPeriodInSecs;
         let angle = dayNightRatio * 360;
 
