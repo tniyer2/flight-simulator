@@ -2,6 +2,7 @@
 // Authors: Bryan Cohen & Tanishq Iyer
 'use strict';
 
+const vec2 = glMatrix.vec2;
 // const vec3 = glMatrix.vec3;
 // const vec4 = glMatrix.vec4;
 const mat4 = glMatrix.mat4;
@@ -91,9 +92,9 @@ function initProgram() {
 
         // Material constants
         const float materialAmbient = 0.2;
-        const float materialDiffuse = 0.4;
-        const float materialSpecular = 0.6;
-        const float materialShininess = 10.0;
+        const float materialDiffuse = 0.95;
+        const float materialSpecular = 0.05;
+        const float materialShininess = 5.0;
         
         // Attenuation constants
         const float lightConstantA = 0.05;
@@ -168,9 +169,9 @@ function initBuffers() {
     // Create the camera
     const camera = createSceneTreeNode("camera");
     {
+        const t = camera.localTransform;
         const translation = mat4.fromTranslation(mat4.create(), [0, 0, -1]);
         
-        const t = camera.localTransform;
         mat4.multiply(t, t, translation);
     }
 
@@ -233,11 +234,18 @@ function initBuffers() {
     }
 
     gl.world.addChild(gl.terrain);
+    gl.quadtree = createQuadTree(
+        gl.terrain.model,
+        gl.terrain.transform,
+        [0, 0, 0],
+        [20, 20],
+        8
+    );
+
     gl.world.addChild(gl.drone);
     gl.drone.addChild(camera);
-    gl.world.camera = camera;
 
-    gl.quadtree = createQuadTree(gl.terrain.model, gl.terrain.transform, [0, 0, 0], 200, 1);
+    gl.world.camera = camera;
 }
 
 /**
@@ -252,6 +260,10 @@ function createSceneTreeNode(type) {
     };
 
     obj.addChild = function addChild(child) {
+        if (child.parent !== null) {
+            throw new Error("Child already has a parent.");
+        }
+
         child.parent = this;
         this.children.push(child);
     }
@@ -331,6 +343,8 @@ function updateProjectionMatrix() {
  * Runs all tasks for a single frame.
  */
 function runFrame() {
+    console.log("FRAME START");
+
     updateDroneTransform();
 
     render();
@@ -348,12 +362,12 @@ function render() {
 
     // Calculate directional light for day/night cycle
     {
-        const dayNightPeriodInSecs = 30; // TODO: change 30 to longer later
+        const dayNightPeriodInSecs = 120;
         const dayNightRatio = ((ms / 1000) % dayNightPeriodInSecs) / dayNightPeriodInSecs;
         let angle = dayNightRatio * 360;
 
-        const baseIntensity = 1;
-        const extraDayIntensity = 1;
+        const baseIntensity = 0.5;
+        const extraDayIntensity = 2;
         let intensity;
         
         if (angle < 180) {
@@ -363,7 +377,7 @@ function render() {
             intensity = baseIntensity;
         }
         
-        const dir = [0, 0, 1]; // TODO: 1 or -1
+        const dir = [0, 0, -1];
         vec3.transformMat4(dir, dir, angleAxisToMat4(angle, [1, 0, 0]));
         
         gl.uniform4fv(gl.program.uLight, [...dir, 0]);
@@ -393,7 +407,8 @@ function render() {
 }
 
 function updateDroneTransform() {
-    const updated = mat4.identity(mat4.create());
+    // updated is in local space
+    const delta = mat4.identity(mat4.create());
 
     // !== for booleans does exclusive or
 
@@ -401,7 +416,7 @@ function updateDroneTransform() {
     if (gl.input.isKeyDown("ArrowUp") !== gl.input.isKeyDown("ArrowDown")) {
         const factor = gl.input.isKeyDown("ArrowUp") ? -1 : 1;
         const t = mat4.fromTranslation(mat4.create(), [0, 0, 0.2 * factor]);
-        mat4.multiply(updated, updated, t);
+        mat4.multiply(delta, delta, t);
     }
 
     const rotations = [];
@@ -428,23 +443,30 @@ function updateDroneTransform() {
         quat.identity(quat.create()));
     finalRotation = mat4.fromQuat(mat4.create(), finalRotation);
 
-    mat4.multiply(updated, updated, finalRotation);
-    const hypothetical = mat4.multiply(mat4.create(), gl.drone.transform, updated);
+    mat4.multiply(delta, delta, finalRotation);
 
-    const collision = gl.quadtree.checkCollision(gl.drone.model, hypothetical);
+    const updatedInWorldSpace = mat4.create();
+    mat4.multiply(updatedInWorldSpace, gl.drone.transform, delta);
+    {
+        const s = mat4.fromScaling(mat4.create(), Array(3).fill().map(() => 1.1));
+        mat4.multiply(updatedInWorldSpace, s, updatedInWorldSpace);
+    }
+    const collidesWithTerrain = gl.quadtree.checkCollision(gl.drone.model, updatedInWorldSpace);
 
     const terrainAABB = getAxisAlignedXZBoundingBox(gl.terrain.model, gl.terrain.transform);
-    const droneAABB = getAxisAlignedXZBoundingBox(gl.drone.model, hypothetical);
+    const droneAABB = getAxisAlignedXZBoundingBox(gl.drone.model, updatedInWorldSpace);
 
-    const outOfBounds = terrainAABB.max[0] < droneAABB.max[0] ||
-                        terrainAABB.max[2] < droneAABB.max[2] ||
-                        terrainAABB.min[0] > droneAABB.min[0] ||
-                        terrainAABB.min[2] > droneAABB.min[2];
+    logXTimes("terrainAABB", 1, terrainAABB);
 
-    if (!collision && !outOfBounds) {
+    const outOfBounds = droneAABB.max[0] > terrainAABB.max[0] ||
+                        droneAABB.max[2] > terrainAABB.max[2] ||
+                        droneAABB.min[0] < terrainAABB.min[0] ||
+                        droneAABB.min[2] < terrainAABB.min[2];
+
+    if (!(collidesWithTerrain || outOfBounds)) {
         // if no collisions, then move the drone
         const t = gl.drone.localTransform;
-        mat4.multiply(t, t, updated);
+        mat4.multiply(t, t, delta);
     }
 }
 
@@ -467,7 +489,7 @@ function loadModel(coords, colors, indices, useStrips) {
     loadArrayBuffer(normals, gl.program.aNormal, 3, gl.FLOAT);
 
     if (colors === null) {
-        colors = Array(coords.length / 3).fill(null).flatMap(() => [0, 1, 0]);
+        colors = Array(coords.length / 3).fill().flatMap(() => [0, 1, 0]);
     }
     
     // Load vertex colors into GPU
@@ -560,60 +582,64 @@ function scaleByConstant(matrix, value) {
  * length_  - the length and width of the tree.
  * maxDepth - the number of nodes before the tree stops splitting.
  */
-function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
+function createQuadTree(model, modelTransform, origin_, size_, maxDepth) {
     if (typeof maxDepth !== 'number' || maxDepth < 1) {
         throw new Error("Invalid argument.");
     }
 
     // if isXAxis is false it implies the node splits on the z-axis.
-    const createNode = (isXAxis, origin, length, depth) => {
+    const createNode = (isXAxis, origin, size, depth) => {
         const node = {
-            isXAxis, origin, length, depth, front: null, back: null
+            isXAxis, origin, size, depth, front: null, back: null
         };
 
         if (depth === maxDepth) {
             node.leafs = [];
         }
 
+        node._initChild = function (isFront) {
+            isFront = isFront === true;
+
+            const notAxis = this.isXAxis ? 1 : 0;
+
+            let newSize = vec2.clone(this.size);
+            newSize[notAxis] /= 2;
+
+            const delta = (isFront ? 1 : -1) * (newSize[notAxis] / 2);
+            const deltaVec = this.isXAxis ? [0, 0, delta] : [delta, 0, 0];
+
+            const newOrigin = vec3.add(vec3.create(), this.origin, deltaVec);
+
+            const node = createNode(!this.isXAxis, newOrigin, newSize, this.depth+1);
+
+            if (isFront) {
+                this.front = node;
+            } else {
+                this.back = node;
+            }
+        };
+
         // adds a triangle to the tree, possibly creating new nodes.
         node._add = function (triangle) {
+            // base case
             if (this.depth === maxDepth) {
                 this.leafs.push(triangle);
                 return;
             }
 
-            let inFront = this._isTriangleInFrontOrBack(triangle)[0];
+            let [inFront, isBack] = this._isTriangleInFrontOrBack(triangle);
             
             if (inFront) {
                 if (this.front === null) {
                     this._initChild(true);
                 }
                 this.front._add(triangle);
-            } else {
+            }
+            if (isBack) {
                 if (this.back === null) {
                     this._initChild(false);
                 }
                 this.back._add(triangle);
-            }
-        };
-
-        node._initChild = function (isFront) {
-            isFront = isFront === true;
-
-            const factor = isFront ? 1 : -1;
-
-            const newLength = this.length / 2;
-
-            const delta = factor * (newLength / 2);
-            const deltaVec = this.isXAxis ? [0, 0, delta] : [delta, 0, 0];
-            const newOrigin = vec3.add(vec3.create(), this.origin, deltaVec);
-
-            const node = createNode(!this.isXAxis, newOrigin, newLength, this.depth+1);
-
-            if (isFront) {
-                this.front = node;
-            } else {
-                this.back = node;
             }
         };
 
@@ -636,30 +662,6 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
             return [isFront, isBack];
         };
 
-        node.checkCollision = function (otherModel, otherTransform) {
-            if (this.depth === maxDepth) {
-                if (this._doesAnyLeafCollide(otherModel, otherTransform)) {
-                    return true;
-                }
-            }
-
-            const aabb = getAxisAlignedXZBoundingBox(otherModel, otherTransform);
-
-            let isFront = this._isAABBInFrontOrBack(aabb)[0];
-
-            if (isFront) {
-                if (this.front !== null && this.front.checkCollision(otherModel, otherTransform)) {
-                    return true;
-                }
-            } else {
-                if (this.back !== null && this.back.checkCollision(otherModel, otherTransform)) {
-                    return true;
-                }
-            }
-
-            return false;
-        };
-
         // returns whether a AABB should go in the front node
         // and whether it should go in the back node.
         node._isAABBInFrontOrBack = function (aabb) {
@@ -680,7 +682,7 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
         };
 
         // returns true if any leafs nodes (triangles) collide with the model
-        node._doesAnyLeafCollide = function (otherModel, otherTransform) {       
+        node._doesAnyLeafCollide = function (otherModel, otherTransform) {
             for (let i = 0; i < otherModel.coords.length; i += 9) {
                 let a = otherModel.coords.subarray(i, i+3);
                 a = vec3.transformMat4(vec3.create(), a, otherTransform);
@@ -708,10 +710,35 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
             return false;
         };
 
+        node.checkCollision = function (otherModel, otherTransform) {
+            if (this.depth === maxDepth) {
+                if (this._doesAnyLeafCollide(otherModel, otherTransform)) {
+                    return true;
+                }
+            }
+
+            const aabb = getAxisAlignedXZBoundingBox(otherModel, otherTransform);
+
+            let [isFront, isBack] = this._isAABBInFrontOrBack(aabb);
+
+            if (isFront) {
+                if (this.front !== null && this.front.checkCollision(otherModel, otherTransform)) {
+                    return true;
+                }
+            }
+            if (isBack) {
+                if (this.back !== null && this.back.checkCollision(otherModel, otherTransform)) {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+
         return node;
     };
 
-    const root = createNode(true, origin_, length_, 1);
+    const root = createNode(true, origin_, size_, 1);
 
     // add the triangles to the tree
     for (let i = 0; i < model.coords.length; i += 9) {
@@ -727,6 +754,24 @@ function createQuadTree(model, modelTransform, origin_, length_, maxDepth) {
 
         root._add(triangle);
     }
+
+    function nodeToString(node) {
+        let s = "";
+
+        s += `${node.depth}, ${node.isXAxis ? "x" : "z"}, ${node.size}, [${node.origin[0]}, ${node.origin[2]}]\n`;
+
+        if (node.leafs) {
+            s += `${" ".repeat(node.depth-1)}  LEAFS: ${node.leafs.length}\n`;
+        } else {
+            s += `${" ".repeat(node.depth-1)}front: ` + (node.front === null ? "null\n" : nodeToString(node.front));
+            s += `${" ".repeat(node.depth-1)}back: ` + (node.back === null ? "null\n" : nodeToString(node.back));
+        }
+
+        return s;
+    }
+
+    console.log(root);
+    console.log(nodeToString(root));
 
     return root;
 }
