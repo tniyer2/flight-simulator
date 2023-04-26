@@ -1,5 +1,3 @@
-// Various useful functions
-/* exported line_seg_triangle_intersection calc_normals */
 
 const vec3 = glMatrix.vec3;
 const _temps = [vec3.create(), vec3.create(), vec3.create(), vec3.create(), vec3.create(), vec3.create(), vec3.create()];
@@ -12,7 +10,7 @@ const _temps = [vec3.create(), vec3.create(), vec3.create(), vec3.create(), vec3
  *
  * Each argument must be a vec3 (i.e. 3 element array).
  */
-function line_seg_triangle_intersection(p, vec, a, b, c) {
+function lineSegTriangleIntersection(p, vec, a, b, c) {
     let [u, v] = [vec3.subtract(_temps[0], b, a), vec3.subtract(_temps[1], c, a)]; // triangle edge vectors
     let uu = vec3.dot(u, u), vv = vec3.dot(v, v), uv = vec3.dot(u, v);
     let tri_scale = uv*uv-uu*vv;
@@ -46,7 +44,7 @@ function line_seg_triangle_intersection(p, vec, a, b, c) {
  * Returns:
  *    Float32Array of the normals with 3 values per vertex
  */
-function calc_normals(coords, indices, is_tri_strip) {
+function calcNormals(coords, indices, is_tri_strip) {
     if (is_tri_strip !== true && is_tri_strip !== false) { is_tri_strip = true; }
     
     // Start with all vertex normals as <0,0,0>
@@ -85,24 +83,4 @@ function calc_normals(coords, indices, is_tri_strip) {
     return normals;
 }
 
-const TIMES_LOGGED = {};
-
-function logXTimes(key, numTimes, ...args) {
-    if (numTimes === null) {
-        console.log(...args);
-        return;
-    }
-
-    if (!(key in TIMES_LOGGED)) {
-        TIMES_LOGGED[key] = 0;
-    }
-
-    if (TIMES_LOGGED[key] < numTimes) {
-        TIMES_LOGGED[key] += 1;
-        console.log(...args);
-    }
-}
-
-function logOnce(key, ...args) {
-    logXTimes(key, 1, ...args);
-}
+export { calcNormals, lineSegTriangleIntersection };
